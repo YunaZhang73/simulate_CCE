@@ -1,0 +1,506 @@
+---
+title: "dynamics"
+author: "Yuna"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+date: "2024-04-25"
+---
+
+### Working path
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "/Users/yuna/B6/simulation/",echo = T,message =  F,warning=F,results = "hide")
+```
+
+### Library packages
+
+```{r}
+library(DBI)
+library(RSQLite)
+library(dplyr)
+library(reshape2)
+library(ggplot2)
+library(ggrepel)# annotation in figures
+library(latex2exp)
+library(scales)
+```
+
+### Connect the database
+
+```{r results='hold'}
+singleTrait_db<-dbConnect(RSQLite::SQLite(),dbname="~/shortcut/B6/simulation/singleTrait.sqlite")
+# on.exit(dbDisconnect(singleTrait_db))
+
+dbListTables(singleTrait_db)
+```
+
+### Simulation parameters
+
+```{r}
+N=10000
+geno_len=999999+1
+mutation_rate=7e-10
+U=2*mutation_rate*geno_len
+theta=14
+
+paras<-rbind(data.frame(Vs=1,sdMutation=0.05,speedCoef=c(0.002,0.005,0.01,0.02,0.05,0.1,0.2,0.3,0.35,0.38,0.39,0.4,0.5,0.53,0.55,0.8,1.0,1.2,1.4,1.5,1.6)),
+             data.frame(Vs=1,sdMutation=0.1,speedCoef=c(0.002,0.005,0.01,0.02,0.05,0.1,0.2,0.3,0.4,0.5,1.0,1.1,1.2,1.3,1.6,1.65,2.2,2.8,2.9,3.0,3.2,3.4,3.6)),
+             data.frame(Vs=1,sdMutation=0.5,speedCoef=c(0.002,0.005,0.01,0.02,0.05,0.1,0.2,0.3,0.4,0.5,1.0,2.0,3.0,6.5,10.0,11.0,12.0,12.5,13.5,14.0,15.0,16.0,17.0,18.0,18.2,20.0,20.5,21.0)),
+             data.frame(Vs=10,sdMutation=0.05,speedCoef=c(0.002,0.005,0.01,0.02,0.05,0.07,0.08,0.09,0.1,0.11,0.2,0.3,0.4)),
+             data.frame(Vs=10,sdMutation=0.1,speedCoef=c(0.002,0.005,0.01,0.02,0.05,0.1,0.15,0.18,0.2,0.22,0.23,0.24,0.3,0.4,0.5,0.6,0.7,0.8)),
+             data.frame(Vs=10,sdMutation=0.5,speedCoef=c(0.002,0.005,0.01,0.02,0.05,0.1,0.2,0.3,0.4,0.5,1.3,2.3,2.32,2.35,2.4,3.3,3.35,4.3,1.0,4.5,4.6,4.9,5.0,5.2,5.4,6.0)),
+             data.frame(Vs=100,sdMutation=0.05,speedCoef=c(0.002,0.005,0.01,0.02,0.025,0.03,0.031,0.035,0.04,0.05,0.1,0.2)),
+             data.frame(Vs=100,sdMutation=0.1,speedCoef=c(0.002,0.005,0.01,0.02,0.03,0.04,0.045,0.05,0.055,0.057,0.1,0.2,0.3)),
+             data.frame(Vs=100,sdMutation=0.5,speedCoef=c(0.002,0.005,0.01,0.02,0.05,0.1,0.2,0.3,0.35,0.38,0.39,0.4,0.5,0.52,0.55,0.7,0.9,1.1,1.3,1.4,1.5))
+)
+```
+
+### Global plotting settings
+
+```{r}
+theme_set(theme_classic())
+label_sdMutation<-function(string){TeX(paste("$\\omega : $",string))}
+```
+
+# Genetic variance during the stabilizing-selection phase
+
+```{r}
+ggplot(burnin_stats2,aes(x=generation/N-10,y=varPheno_mean))+
+  geom_line()+
+  geom_ribbon(aes(ymin=varPheno_mean-varPheno_sd,ymax=varPheno_mean+varPheno_sd),col=NA,alpha=.3)+
+  geom_hline(aes(yintercept=2*U*Vs),col='red')+ # estimates from House-of-Card model
+  geom_hline(aes(yintercept=2*U*Vs/(1+Vs/(N*sdMutation^2))),col='red',linetype="dashed")+ # estimates from stochastic House-of-Card model
+  facet_grid(Vs~sdMutation,scales="free_y",
+             labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)))+
+  labs(x=TeX("$Generation\\ (\\times 10^4 )"),y="Genetic variance")
+```
+
+# Dynamics of phenotype during the moving-optimum phase
+
+Pick out few speeds to plot
+```{r}
+load("data/processed/stats2.RData")
+
+paras_quantile<-group_by(paras,Vs,sdMutation)%>%
+  summarise(speed0=quantile(speedCoef,0),
+            speed20=quantile(speedCoef,0.2),
+            speed40=quantile(speedCoef,0.4),
+            speed60=quantile(speedCoef,0.6),
+            speed80=quantile(speedCoef,0.8),
+            speed100=quantile(speedCoef,1))
+paras_quantile<-as.data.frame(paras_quantile)
+paras_quantile[1,4:8]<-c(0.020,0.2,0.5,1.2,1.6)
+paras_quantile[2,4:8]<-c(0.05,0.4,1.6,3.0,3.8)
+paras_quantile[3,4:8]<-c(0.05,0.4,6.5,15.0,20.0)
+paras_quantile[4,4:8]<-c(0.01,0.05,0.1,0.3,0.5)
+paras_quantile[5,4:8]<-c(0.02,0.1,0.4,0.6,0.9)
+paras_quantile[6,4:8]<-c(0.05,0.4,3.3,4.9,6.0)
+paras_quantile[7,4:8]<-c(0.005,0.02,0.05,0.2,0.3)
+paras_quantile[8,4:8]<-c(0.01,0.02,0.1,0.2,0.4)
+paras_quantile[9,4:8]<-c(0.02,0.2,0.7,1.3,1.6)
+
+paras_quantile<-melt(paras_quantile,id.vars=c('Vs','sdMutation'),variable.name='quantile',value.name = 'speedCoef')
+
+gradual_stats2_0<-gradual_stats2
+gradual_stats2<-left_join(paras_quantile,gradual_stats2_0,by=c('Vs','sdMutation','speedCoef'))
+```
+
+### Lag between the new optimum and the population mean during the moving-optimum phase
+
+```{r}
+ggplot(gradual_stats2,aes(x=generation/N-10,y=gap))+
+  geom_line(aes(group=speedCoef,col=speedCoef))+
+  facet_wrap(sdMutation~Vs,scales="free_y",
+             labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)))+
+  
+  scale_color_viridis_c(option="C")+
+  scale_x_continuous(trans='log10',labels=comma)+
+  scale_y_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  labs(x=TeX("$Generation\\ (\\times 10^4 )"),y="Lag",col=TeX("$Speed\\ (\\sigma_{G(S)})"))
+```
+
+Scaling by omega
+```{r}
+gap_dy_p<-ggplot(gradual_stats2,aes(x=generation/N-10,y=gap/sdMutation))+
+  geom_line(aes(group=speedCoef,col=speed/sdMutation/theta))+
+  facet_wrap(sdMutation~Vs,scales="free_y",
+             labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)))+
+  scale_color_viridis_c(option="C")+
+  # scale_x_continuous(trans='log10',labels=comma)+
+  scale_y_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  labs(x=TeX("$Generation\\ (\\times 10^4 )"),y=TeX("$Phenotypic\\ gap\\ (\\omega)"),col=TeX("$Speed\\ (\\omega\\theta)"))
+
+gap_dy_p
+```
+
+
+### Phenotypic gap in extincted populations
+
+
+```{r}
+load("data/processed/stats2.RData")
+extincted_stats2<-subset(extincted_stats2,speedCoef!=22)
+extinct_dy_p<-ggplot(extincted_stats2,aes(x=generation/N-10,y=gap/sdMutation))+
+  geom_line(aes(group=speedCoef,col=as.factor(round(speed/sdMutation/theta,2))),linewidth=1)+
+  facet_wrap(sdMutation~Vs,scales="free_y",
+             labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)))+
+  scale_color_viridis_d(option = "C")+
+  scale_x_continuous(limits=c(0,0.6))+
+  scale_y_continuous(trans='log10')+ #,labels=trans_format("log10", math_format(10^.x)))+
+  labs(x=TeX("$Generation\\ (\\times 10^4 )"),y=TeX("$Phenotypic\\ gap\\ (\\omega)"),col=TeX("$Speed\\ (\\omega\\theta)"))
+
+extinct_dy_p
+```
+
+
+### Fitness during the moving-optimum phase
+
+```{r}
+ggplot(gradual_stats2,aes(x=generation/N-10,y=meanFitness_mean))+
+  geom_line(aes(group=speedCoef,col=speedCoef))+
+  facet_wrap(sdMutation~Vs,scales="free_y",
+             labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)))+
+  scale_color_viridis_c(option="C")+
+  scale_x_continuous(trans='log10',labels=comma)+
+  labs(x=TeX("$Generation\\ (\\times 10^4 )"),y="Fitness",col=TeX("$Speed\\ (\\sigma_{G(S)})"))
+```
+
+Scaling by omega
+```{r}
+fit_dy_p<-ggplot(gradual_stats2,aes(x=generation/N-10,y=meanFitness_mean))+
+  geom_line(aes(group=speedCoef,col=speed/sdMutation/theta))+
+  facet_wrap(sdMutation~Vs,scales="free_y",
+             labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)))+
+  scale_color_viridis_c(option="C")+
+  # scale_x_continuous(trans="log10",labels=comma)+
+  labs(x=TeX("$Generation\\ (\\times 10^4 )"),y="Fitness",col=TeX("$Speed\\ (\\omega\\theta)"))
+
+fit_dy_p
+```
+
+### Genetic variance during the moving-optimum phase
+
+```{r}
+ggplot(gradual_stats2,aes(x=generation/N-10,y=varPheno_mean))+
+  geom_line(aes(group=speedCoef,col=speedCoef))+
+  facet_wrap(sdMutation~Vs,scales="free_y",
+             labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)))+
+  scale_color_viridis_c(option="C")+
+  geom_hline(aes(yintercept=SSE_VG),alpha=.7,linetype='dashed')+
+  scale_x_continuous(trans='log10',labels=comma)+
+  labs(x=TeX("$Generation\\ (\\times 10^4 )"),y="Genetic variance",
+       col=TeX("$Speed\\ (\\sigma_{G(S)})"))
+```
+
+Scaling by omega
+```{r}
+vg_dy_p<-ggplot(gradual_stats2,aes(x=generation/N-10,y=varPheno_mean/sdMutation^2))+
+  geom_line(aes(group=speedCoef,col=speed/sdMutation/theta))+
+  facet_wrap(sdMutation~Vs,scales="free_y",
+             labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)))+
+  scale_color_viridis_c(option="C")+
+  geom_hline(aes(yintercept=SSE_VG/sdMutation^2),alpha=.7,linetype='dashed')+
+  # scale_x_continuous(trans="log10",labels=comma)+
+  labs(x=TeX("$Generation\\ (\\times 10^4 )"),y=TeX("$Genetic\\ variance\\ (\\omega^{2})"),
+       col=TeX("$Speed\\ (\\omega\\theta)"))
+
+vg_dy_p
+```
+
+
+# Dynamics of mutations during the moving-optimum phase
+
+
+
+load data
+```{r}
+load("data/processed/mo_fixedMuta.RData")
+```
+
+### Fixation number ~ generation
+
+```{r}
+ggplot(mo_fixedMuta3,aes(x=endTick_cut/N,y=n_fixed,group=speedCoef,col=speedCoef))+
+  geom_line()+
+  facet_grid(sdMutation~Vs,labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)),scale='free_y')+
+  scale_color_viridis_c(option="C")+
+  scale_x_continuous(trans='log10',labels=comma)+
+  labs(x=TeX("$Generation\\ (\\times 10^4 )"),y="Fixation number per generation",col=TeX("$Speed\\ (\\sigma_{G(S)})"))
+```
+
+Scaling by omega
+```{r}
+fn_dy_p<-ggplot(mo_fixedMuta3,aes(x=endTick_cut/N,y=n_fixed,group=speedCoef,col=speed/sdMutation/theta))+
+  geom_line()+
+  facet_grid(sdMutation~Vs,labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)),scale='free_y')+
+  scale_color_viridis_c(option="C")+
+  # scale_x_continuous(trans='log10',labels=comma)+
+  labs(x=TeX("$Generation\\ (\\times 10^4 )"),y="Fixation number per generation",col=TeX("$Speed\\ (\\omega\\theta)"))
+
+fn_dy_p
+```
+
+### Fixation time ~ generation
+```{r}
+ggplot(mo_fixedMuta3,aes(x=endTick_cut/N,y=mean_fixedtime,group=speedCoef,col=speedCoef))+
+  geom_line()+
+  facet_grid(sdMutation~Vs,labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)),scale='free_y')+
+  scale_color_viridis_c(option="C")+
+  scale_x_continuous(trans='log10',labels=comma)+
+  scale_y_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  labs(x=TeX("$Generation\\ (\\times 10^4 )"),y="Fixation time",col=TeX("$Speed\\ (\\sigma_{G(S)})"))
+```
+
+Scaling by omega
+```{r}
+ggplot(mo_fixedMuta3,aes(x=endTick_cut/N,y=mean_fixedtime,group=speedCoef,col=speed/sdMutation/theta))+
+  geom_line()+
+  facet_grid(sdMutation~Vs,labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)),scale='free_y')+
+  scale_color_viridis_c(option="C")+
+  scale_x_continuous(trans='log10',labels=comma)+
+  scale_y_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  labs(x=TeX("$Generation\\ (\\times 10^4 )"),y="Fixation time",col=TeX('$Speed\\ (\\omega\\theta)'))
+```
+
+### Mean fixed effect size ~ generation
+```{r}
+ggplot(mo_fixedMuta3,aes(x=endTick_cut/N,y=mean_effect,group=speedCoef,col=speedCoef))+
+  geom_line()+
+  facet_grid(sdMutation~Vs,labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)),scale='free_y')+
+  scale_color_viridis_c(option="C")+
+  scale_x_continuous(trans='log10',labels=comma)+
+  labs(x=TeX("$Generation\\ (\\times 10^4 )"),y="Mean fixed effect size",col=TeX("$Speed\\ (\\sigma_{G(S)})"))
+```
+
+Scaling by omega
+```{r}
+fe_dy_p<-ggplot(mo_fixedMuta3,aes(x=endTick_cut/N,y=mean_effect/sdMutation,group=speedCoef,col=speed/sdMutation/theta))+
+  geom_line()+
+  facet_grid(sdMutation~Vs,labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)),scale='free_y')+
+  scale_color_viridis_c(option="C")+
+  # scale_x_continuous(trans='log10',labels=comma)+
+  labs(x=TeX("$Generation\\ (\\times 10^4 )"),y=TeX('$Mean\\ fixed\\ effect\\ size\\ (\\omega)'),col=TeX('$Speed\\ (\\omega\\theta)'))
+
+fe_dy_p
+```
+
+
+### Mean positive fixed effect ~ generation
+```{r}
+ggplot(mo_fixedMuta3,aes(x=endTick_cut/N,y=mean_posEffect,group=speedCoef,col=speedCoef))+
+  geom_line()+
+  facet_grid(sdMutation~Vs,labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)),scale='free_y')+
+  scale_color_viridis_c(option="C")+
+  scale_x_continuous(trans='log10',labels=comma)+
+  labs(x=TeX("$Generation\\ (\\times 10^4 )"),y="Mean positive fixed effect",col=TeX("$Speed\\ (\\sigma_{G(S)})"))
+```
+
+Scaling by omega
+```{r}
+ggplot(mo_fixedMuta3,aes(x=endTick_cut/N,y=mean_posEffect/sdMutation,group=speedCoef,col=speed/sdMutation/theta))+
+  geom_line()+
+  facet_grid(sdMutation~Vs,labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)),scale='free_y')+
+  scale_color_viridis_c(option="C")+
+  scale_x_continuous(trans='log10',labels=comma)+
+  labs(x=TeX("$Generation\\ (\\times 10^4 )"),y=TeX('$Mean\\ positive\\ fixed\\ effect\\ (\\omega)'),col=TeX('$Speed\\ (\\omega\\theta)'))
+```
+
+
+### Mean negative fixed effect ~ generation
+```{r}
+ggplot(mo_fixedMuta3,aes(x=endTick_cut/N,y=mean_negEffect,group=speedCoef,col=speedCoef))+
+  geom_point(size=.1)+
+  facet_grid(sdMutation~Vs,labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)),scale='free_y')+
+  scale_color_viridis_c(option="C")+
+  scale_x_continuous(trans='log10',labels=comma)+
+  labs(x=TeX("$Generation\\ (\\times 10^4 )"),y="Mean negative fixed effect",col=TeX("$Speed\\ (\\sigma_{G(S)})"))
+
+ggplot(mo_fixedMuta3,aes(x=endTick_cut/N,y=mean_negEffect,group=speedCoef,col=speedCoef))+
+  geom_smooth()+
+  facet_grid(sdMutation~Vs,labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)),scale='free_y')+
+  scale_color_viridis_c(option="C")+
+  scale_x_continuous(trans='log10',labels=comma)+
+  labs(x=TeX("$Generation\\ (\\times 10^4 )"),y="Mean negative fixed effect",col=TeX("$Speed\\ (\\sigma_{G(S)})"))
+```
+
+Scaling by omega
+```{r}
+ggplot(mo_fixedMuta3,aes(x=endTick_cut/N,y=mean_negEffect/sdMutation,group=speedCoef,col=speed/sdMutation/theta))+
+  geom_point(size=.1)+
+  facet_grid(sdMutation~Vs,labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)),scale='free_y')+
+  scale_color_viridis_c(option="C")+
+  scale_x_continuous(trans='log10',labels=comma)+
+  labs(x=TeX("$Generation\\ (\\times 10^4 )"),y=TeX("$Mean\\ negative\\ fixed\\ effect (\\omega)"),col=TeX('$Speed\\ (\\omega\\theta)'))
+
+ggplot(mo_fixedMuta3,aes(x=endTick_cut/N,y=mean_negEffect/sdMutation,group=speedCoef,col=speed/sdMutation/theta))+
+  geom_smooth()+
+  facet_grid(sdMutation~Vs,labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)),scale='free_y')+
+  scale_color_viridis_c(option="C")+
+  scale_x_continuous(trans='log10',labels=comma)+
+  labs(x=TeX("$Generation\\ (\\times 10^4 )"),y=TeX("$Mean\\ negative\\ fixed\\ effect\\ (\\omega)"),col=TeX('$Speed\\ (\\omega\\theta)'))
+```
+
+
+## Dynamics of segregating mutations during the moving-optimum phase
+
+Calculate the mean of 100 replicates at the specific generation (record every 10 generations during the first and last 1000 generations and every 500 generations during the middle period)
+```{r}
+load("data/processed/muta2.RData")
+shift_muta2_quantile<-left_join(paras_quantile,shift_muta2,by=c('Vs','sdMutation','speedCoef'))
+mo_muta3_mean<-group_by(shift_muta2_quantile,Vs,sdMutation,speedCoef,generation)%>%filter(n()>=5)%>%
+  summarise_at(vars(-replicate),mean,na.rm=T)
+mo_muta3_mean<-left_join(mo_muta3_mean,parameters,by=c('Vs','sdMutation'))%>%mutate(speed=speedCoef*sqrt(SSE_VG))
+```
+
+### Segregating number ~ generation
+```{r}
+ggplot(mo_muta3_mean,aes(x=generation/N -10,y=n_segregations,group=speedCoef,col=speedCoef))+
+  geom_line()+
+  facet_grid(sdMutation~Vs,labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)),scale='free_y')+
+  scale_color_viridis_c(option="C")+
+  scale_x_continuous(trans='log10',labels=comma)+
+  labs(x=TeX("$Generation\\ (\\times 10^4 )"),y="Segregating number per generation",col=TeX("$Speed\\ (\\sigma_{G(S)})"))
+```
+
+Scaling by omega
+```{r}
+sn_dy_p<-ggplot(mo_muta3_mean,aes(x=generation/N -10,y=n_segregations,group=speedCoef,col=speed/sdMutation/theta))+
+  geom_line()+
+  facet_grid(sdMutation~Vs,labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)),scale='free_y')+
+  scale_color_viridis_c(option="C")+
+  # scale_x_continuous(trans='log10',labels=comma)+
+  labs(x=TeX("$Generation\\ (\\times 10^4 )"),y="Segregating number per generation",col=TeX('$Speed\\ (\\omega\\theta)'))
+
+sn_dy_p
+```
+
+
+### Proportion of positive segregating mutations ~ generation
+```{r}
+ggplot(mo_muta3_mean,aes(x=generation/N -10,y=n_posSegregations/n_segregations,group=speedCoef,col=speedCoef))+
+  geom_line()+
+  facet_grid(sdMutation~Vs,labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)),scale='free_y')+
+  scale_color_viridis_c(option="C")+
+  scale_y_continuous(labels=scales::percent)+
+  scale_x_continuous(trans='log10',labels=comma)+
+  labs(x=TeX("$Generation\\ (\\times 10^4 )"),y="Proportion of positive fixations",col=TeX("$Speed\\ (\\sigma_{G(S)})"))
+```
+
+Scaling by omega
+```{r}
+ggplot(mo_muta3_mean,aes(x=generation/N -10,y=n_posSegregations/n_segregations,group=speedCoef,col=speed/sdMutation/theta))+
+  geom_line()+
+  facet_grid(sdMutation~Vs,labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)),scale='free_y')+
+  scale_color_viridis_c(option="C")+
+  scale_y_continuous(labels=scales::percent)+
+  scale_x_continuous(trans='log10',labels=comma)+
+  labs(x=TeX("$Generation\\ (\\times 10^4 )"),y="Proportion of positive fixations",col=TeX("$Speed\\ (\\omega\\theta)"))
+```
+
+
+### Mean segregating effect size ~ generation
+```{r}
+ggplot(mo_muta3_mean,aes(x=generation/N -10,y=mean_effect,group=speedCoef,col=speedCoef))+
+  geom_line()+
+  facet_grid(sdMutation~Vs,labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)),scale='free_y')+
+  scale_color_viridis_c(option="C")+
+  scale_x_continuous(trans='log10',labels=comma)+
+  labs(x=TeX("$Generation\\ (\\times 10^4 )"),y="Mean segregating effect size",col=TeX("$Speed\\ (\\sigma_{G(S)})"))
+```
+
+Scaling by omega
+```{r}
+se_dy_p<-ggplot(mo_muta3_mean,aes(x=generation/N -10,y=mean_effect/sdMutation,group=speedCoef,col=speed/sdMutation/theta))+
+  geom_line()+
+  facet_grid(sdMutation~Vs,labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)),scale='free_y')+
+  scale_color_viridis_c(option="C")+
+  # scale_x_continuous(trans='log10',labels=comma)+
+  labs(x=TeX("$Generation\\ (\\times 10^4 )"),y=TeX("$Mean\\ segregating\\ effect\\ size\\ (omega)"),col=TeX("$Speed\\ (\\omega\\theta)"))
+
+se_dy_p
+```
+
+### Mean positive segregating effect ~ generation
+```{r}
+ggplot(mo_muta3_mean,aes(x=generation/N -10,y=mean_posEffect,group=speedCoef,col=speedCoef))+
+  geom_line()+
+  facet_grid(sdMutation~Vs,labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)),scale='free_y')+
+  scale_color_viridis_c(option="C")+
+  scale_x_continuous(trans='log10',labels=comma)+
+  labs(x=TeX("$Generation\\ (\\times 10^4 )"),y="Mean positive segregating effect",col=TeX("$Speed\\ (\\sigma_{G(S)})"))
+```
+
+Scaling by omega
+```{r}
+ggplot(mo_muta3_mean,aes(x=generation/N -10,y=mean_posEffect/sdMutation,group=speedCoef,col=speed/sdMutation/theta))+
+  geom_line()+
+  facet_grid(sdMutation~Vs,labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)),scale='free_y')+
+  scale_color_viridis_c(option="C")+
+  scale_x_continuous(trans='log10',labels=comma)+
+  labs(x=TeX("$Generation\\ (\\times 10^4 )"),y=TeX("$Mean\\ positive\\ segregating\\ effect\\ (omega)"),col=TeX("$Speed\\ (\\omega\\theta)"))
+```
+
+### Mean negative segregating effec size ~ generation
+```{r}
+ggplot(mo_muta3_mean,aes(x=generation/N -10,y=mean_negEffect,group=speedCoef,col=speedCoef))+
+  geom_line()+
+  facet_grid(sdMutation~Vs,labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)),scale='free_y')+
+  scale_color_viridis_c(option="C")+
+  scale_x_continuous(trans='log10',labels=comma)+
+  labs(x=TeX("$Generation\\ (\\times 10^4 )"),y="Mean negative segregating effect",col=TeX("$Speed\\ (\\sigma_{G(S)})"))
+```
+
+Scaling by omega
+```{r}
+ggplot(mo_muta3_mean,aes(x=generation/N -10,y=mean_negEffect/sdMutation,group=speedCoef,col=speed/sdMutation/theta))+
+  geom_line()+
+  facet_grid(sdMutation~Vs,labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)),scale='free_y')+
+  scale_color_viridis_c(option="C")+
+  scale_x_continuous(trans='log10',labels=comma)+
+  labs(x=TeX("$Generation\\ (\\times 10^4 )"),y=TeX("$Mean\\ negative\\ segregating\\ effect\\ (\\omega)"),col=TeX('$Speed\\ (\\omega\\theta)'))
+```
+
+
+### Supplementary figures
+```{r}
+pdf("dynamic_gap.pdf")
+gap_dy_p+theme(aspect.ratio = 0.6)
+dev.off()
+
+pdf("dynamic_extinct_cases.pdf")
+extinct_dy_p+theme(aspect.ratio = 0.6)
+dev.off()
+
+pdf("dynamic_fitness.pdf")
+fit_dy_p+theme(aspect.ratio = 0.6)
+dev.off()
+
+pdf("dynamic_vg.pdf")
+vg_dy_p+theme(aspect.ratio = 0.6)
+dev.off()
+
+pdf("dynamic_fixation_number.pdf")
+fn_dy_p+theme(aspect.ratio = 0.6)
+dev.off()
+
+pdf("dynamic_fixed_effect.pdf")
+fe_dy_p+theme(aspect.ratio = 0.6)
+dev.off()
+
+pdf("dynamic_segregating_number.pdf")
+sn_dy_p+theme(aspect.ratio = 0.6)
+dev.off()
+
+pdf("dynamic_segregating_effect.pdf")
+se_dy_p+theme(aspect.ratio = 0.6)
+dev.off()
+```
+
+
+### Disconnect the database
+
+```{r}
+dbDisconnect(singleTrait_db)
+```

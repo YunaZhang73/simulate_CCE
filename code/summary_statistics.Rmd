@@ -1,0 +1,924 @@
+---
+title: "Summary statistics of the stationary states"
+author: "Yuna"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+date: '2024-01-07'
+---
+
+### Working path
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "/Users/yuna/B6/simulation/",echo = T,message =  F,warning=F,results = "hide")
+```
+
+### Library packages
+
+```{r}
+library(dplyr)
+library(reshape2)
+library(ggplot2)
+library(ggpmisc)# add linear regression equation to figures
+library(latex2exp)
+library(ggpubr)# multiple figures in a page
+library(scales)
+library(cowplot)# get_legend() & plot_grid() functions
+```
+
+### Simulation parameters
+
+```{r}
+N=10000
+theta=7e-10 * 2e4 * 1e6
+
+paras<-rbind(data.frame(Vs=1,sdMutation=0.05,speedCoef=c(0.002,0.005,0.01,0.02,0.05,0.1,0.2,0.3,0.35,0.38,0.39,0.4,0.5,0.53,0.55,0.8,1.0,1.2,1.4,1.5,1.6)),
+             data.frame(Vs=1,sdMutation=0.1,speedCoef=c(0.002,0.005,0.01,0.02,0.05,0.1,0.2,0.3,0.4,0.5,1.0,1.1,1.2,1.3,1.6,1.65,2.2,2.8,2.9,3.0,3.2,3.4,3.6)),
+             data.frame(Vs=1,sdMutation=0.5,speedCoef=c(0.002,0.005,0.01,0.02,0.05,0.1,0.2,0.3,0.4,0.5,1.0,2.0,3.0,6.5,10.0,11.0,12.0,12.5,13.5,14.0,15.0,16.0,17.0,18.0,18.2,20.0,20.5,21.0)),
+             data.frame(Vs=10,sdMutation=0.05,speedCoef=c(0.002,0.005,0.01,0.02,0.05,0.07,0.08,0.09,0.1,0.11,0.2,0.3,0.4)),
+             data.frame(Vs=10,sdMutation=0.1,speedCoef=c(0.002,0.005,0.01,0.02,0.05,0.1,0.15,0.18,0.2,0.22,0.23,0.24,0.3,0.4,0.5,0.6,0.7,0.8)),
+             data.frame(Vs=10,sdMutation=0.5,speedCoef=c(0.002,0.005,0.01,0.02,0.05,0.1,0.2,0.3,0.4,0.5,1.3,2.3,2.32,2.35,2.4,3.3,3.35,4.3,1.0,4.5,4.6,4.9,5.0,5.2,5.4,6.0)),
+             data.frame(Vs=100,sdMutation=0.05,speedCoef=c(0.002,0.005,0.01,0.02,0.025,0.03,0.031,0.035,0.04,0.05,0.1,0.2)),
+             data.frame(Vs=100,sdMutation=0.1,speedCoef=c(0.002,0.005,0.01,0.02,0.03,0.04,0.045,0.05,0.055,0.057,0.1,0.2,0.3)),
+             data.frame(Vs=100,sdMutation=0.5,speedCoef=c(0.002,0.005,0.01,0.02,0.05,0.1,0.2,0.3,0.35,0.38,0.39,0.4,0.5,0.52,0.55,0.7,0.9,1.1,1.3,1.4,1.5))
+)
+```
+
+### Global plotting settings
+
+```{r}
+theme_set(theme_classic())
+theme_update(text=element_text(size=13),plot.title=element_text(size=13),
+             legend.text=element_text(size=10),legend.title=element_text(size=10,hjust=.5),
+             legend.key.size=unit(.3,'cm'),
+             legend.key.width=unit(.6,'cm'),
+             legend.spacing=unit(0,'cm'),
+             legend.background = element_rect(color="grey",fill=NA))
+
+label_sdMutation<-function(string){TeX(paste("$\\omega : $",string))}
+
+negativelog_trans <- function(base = exp(1)) {
+    trans <- function(x) log(-x, base)
+    inv <- function(x) -base^x
+    trans_new(paste0("reverselog_", format(base)), transform = trans, inverse=inv)
+}
+```
+
+
+### Stationary state during the last 1000 generations
+
+load data
+```{r}
+load("data/processed/df2.RData")
+```
+
+Stationary state in the stabilizing-selection phase
+```{r}
+# Lag is stationary
+ggplot(SSE_df2,aes(x=generation/N-10,y=gap))+
+  geom_line()+
+  facet_wrap(sdMutation~Vs,scales="free_y",
+             labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)))+
+  labs(x=TeX("$Generation\\ (\\times 10^4 )"),y="Lag")
+```
+
+Stationary state in the moving-optimum phase
+```{r}
+# Lag is stationary
+ggplot(MOE_df2,aes(x=generation/N-10,y=gap))+
+  geom_line(aes(group=speedCoef,col=speedCoef*sqrt(SSE_VG)/sdMutation))+
+  facet_wrap(sdMutation~Vs,scales="free_y",
+             labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)))+
+  scale_color_viridis_c()+
+  labs(x=TeX("$Generation\\ (\\times 10^4 )"),y="Lag",col = "Speed")
+```
+
+Take the average of the 1000 generations
+```{r}
+# take average
+df<-group_by(MOE_df2,Vs,sdMutation,speedCoef)%>%
+  summarise(MOE_VG=mean(varPheno_mean),
+            MOE_VG_sd=sd(varPheno_mean),
+            MOE_gap=mean(gap),
+            MOE_gap_sd=sd(gap),
+            MOE_fitness=mean(meanFitness_mean))
+df<-left_join(df,as.data.frame(parameters),by=c("Vs","sdMutation"))
+df<-mutate(df,
+           speed=speedCoef * sqrt(SSE_VG),
+           sigmaOmega2=sdMutation^2/Vs,
+           group=paste0("Vs=",Vs,", $\\sigma_{m}=$",sdMutation))
+df<-as.data.frame(df)
+
+so=unique(df$sigmaOmega2)%>%sort
+so=as.character(format(so,scientific = T))%>%unique
+df$sigmaOmega2<-format(df$sigmaOmega2,scientific=T)
+df$sigmaOmega2<-factor(df$sigmaOmega2,level=so,labels=so)
+```
+
+
+### Critical speed
+```{r}
+#critical speed at specific fitness cutoff
+fit0.1<-filter(df,MOE_fitness>0.1)%>%group_by(Vs,sdMutation)%>%slice_max(speedCoef)%>%mutate(Cutoff="0.1")
+fit0.01<-filter(df,MOE_fitness>0.01)%>%group_by(Vs,sdMutation)%>%slice_max(speedCoef)%>%mutate(Cutoff="0.01")
+fit0.001<-filter(df,MOE_fitness>0.001)%>%group_by(Vs,sdMutation)%>%slice_max(speedCoef)%>%mutate(Cutoff="0.001")
+fit0<-group_by(df,Vs,sdMutation)%>%slice_max(speedCoef)%>%mutate(Cutoff="0")
+
+fit_df<-rbind(fit0.1,fit0.01,fit0.001)
+# if simulate more, fit0.1$speedCoef<-c(0.38,1.15,12.2,0.072,0.185,2.35,0.022,0.042,0.37)
+
+# generate equations for the power-law
+equation_label<-split(fit_df,fit_df$Cutoff)%>%
+  lapply(FUN = function(subdf){
+    x=log10(subdf$sdMutation^2/subdf$Vs)
+    y=log10(subdf$speed/subdf$sdMutation/theta)
+    lm_model<-lm(y~x)
+    
+    a=10^(lm_model$coefficients[1])
+    b=lm_model$coefficients[2]
+    label=sprintf("$%.2f \\chi^{%.2f}$",a,b)
+    
+    return(label)
+  })
+equation_label<-data.frame(Cutoff=names(equation_label),label=unlist(equation_label))
+equation_label<-mutate(equation_label,x_pos=1e-4,y_pos=c(0.1,0.08,0.06))
+
+vcrit_p<-ggplot(fit_df,aes(x=sdMutation^2/Vs,y=speed/sdMutation/theta,col=Cutoff))+
+  geom_point()+
+  stat_poly_line()+
+  # stat_poly_eq(use_label(c("eq", "R2")))+
+  geom_text(data = equation_label,
+    aes(x = x_pos, y = y_pos,label = TeX(label, output = "character")),
+    parse = TRUE,show.legend = F)+
+  scale_x_continuous(trans='log10',labels = trans_format("log10", math_format(10^.x)))+
+  scale_y_continuous(trans='log10',breaks = c(0.01, 0.1),labels = trans_format("log10", math_format(10^.x)))+
+  scale_color_manual(values=c("#004488","#DDAA33","#bb5566"),breaks=c("0.001","0.01","0.1"),
+                     labels=unname(TeX(c("$w_{th}=0.001","$w_{th}=0.01","$w_{th}=0.1"))))+
+  labs(x=TeX("$\\chi"),y=TeX("$Threshold\\ speed\\ (\\omega\\theta)"),col="Fitness threshold")+
+  theme(legend.position= c(0.7,0.2))+
+  annotation_logticks(sides = "bl")
+
+# speeds in units of sigma_g
+equation_label_sigmaG<-split(fit_df,fit_df$Cutoff)%>%
+  lapply(FUN = function(subdf){
+    x=log10(subdf$sdMutation^2/subdf$Vs)
+    y=log10(subdf$speedCoef)
+    lm_model<-lm(y~x)
+    
+    a=10^(lm_model$coefficients[1])
+    b=lm_model$coefficients[2]
+    label=sprintf("$%.2f \\chi^{%.2f}$",a,b)
+    
+    return(label)
+  })
+equation_label_sigmaG<-data.frame(Cutoff=names(equation_label_sigmaG),label=unlist(equation_label_sigmaG))
+equation_label_sigmaG<-mutate(equation_label_sigmaG,x_pos=1e-4,y_pos=c(10,6,1))
+
+vcrit_p_sigmaG<-ggplot(fit_df,aes(x=sdMutation^2/Vs,y=speedCoef,col=Cutoff))+
+  geom_point()+
+  stat_poly_line()+
+  # stat_poly_eq(use_label(c("eq", "R2")))+
+  geom_text(data = equation_label_sigmaG,
+    aes(x = x_pos, y = y_pos,label = TeX(label, output = "character")),
+    parse = TRUE,show.legend = F)+
+  scale_x_continuous(trans='log10',labels = trans_format("log10", math_format(10^.x)))+
+  scale_y_continuous(trans='log10',labels = trans_format("log10", math_format(10^.x)))+
+  scale_color_manual(values=c("#004488","#DDAA33","#bb5566"),breaks=c("0.001","0.01","0.1"),
+                     labels=unname(TeX(c("$w_{th}=0.001","$w_{th}=0.01","$w_{th}=0.1"))))+
+  labs(x=TeX("$\\chi"),y=TeX("$Threshold\\ speed\\ (\\sigma_{G(S)})"),col="Fitness threshold")+
+  # geom_hline(yintercept = c(0.04125416,0.79),linetype="dashed")+ # first one is from Maize GE trait, the 2nd one might be from Darwin Finches
+  theme(legend.position= c(0.7,0.2))+
+  annotation_logticks(sides = "bl")
+
+vcrit_p
+vcrit_p_sigmaG
+plot(fit0.1$speedCoef,fit0$speedCoef)
+abline(0,1)
+
+# pdf("output/threshold_speed_polygenic.pdf", width=4,height=3)
+# vcrit_p
+# dev.off()
+# pdf("output/threshold_speed_polygenic_scaledByVar.pdf",weight=4,height=3)
+# vcrit_p_sigmaG
+# dev.off()
+```
+
+
+### Lag ~ shift speed
+
+```{r}
+ggplot(df,aes(x=speed,y=MOE_gap,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  scale_y_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  labs(x="Shift speed",y="Lag")
+```
+
+Scaling by omega
+```{r}
+lag_p<-ggplot(df,aes(x=speed/sdMutation/theta,y=MOE_gap/sdMutation,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  scale_y_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  labs(x=TeX("$Shift\\ speed\\ (\\omega\\theta / generation)"),y=TeX("$Mean\\ lag\\ (\\omega)"))
+
+lag_p+theme(legend.position = "inside",legend.position.inside = c(0.2,0.6))
+
+# pdf("output/lag_polygenic.pdf",width=4,height=3)
+# lag_p+theme(legend.position = "inside",legend.position.inside = c(0.2,0.6))
+# dev.off()
+```
+
+Scaling by sigma_g
+```{r}
+lag_p2<-ggplot(df,aes(x=speed/sqrt(SSE_VG),y=MOE_gap,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  scale_y_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  labs(x=TeX("$Shift\\ speed\\ (\\sigma_{G(S)} / generation)"),y=TeX("$Lag"))
+
+lag_p2
+```
+
+### Fitness ~ shift speed
+
+```{r}
+ggplot(df,aes(x=speed,y=MOE_fitness,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  labs(x="Shift speed",y='Fitness')
+```
+
+Scaling by omega
+```{r}
+fit_p<-ggplot(df,aes(x=speed/sdMutation/theta,y=MOE_fitness,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  labs(x=TeX("$Shift\\ speed\\ (\\omega\\theta / generation)"),y="Mean fitness")
+
+fit_p+theme(legend.position = "inside",legend.position.inside = c(0.2,0.4))
+
+# pdf("fitness_polygenic.pdf",width=4,height=3)
+# fit_p+theme(legend.position = "inside",legend.position.inside = c(0.2,0.4))
+# dev.off()
+```
+
+Scaling by sigma_g
+```{r}
+fit_p2<-ggplot(df,aes(x=speed/sqrt(SSE_VG),y=MOE_fitness,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  labs(x=TeX("$Shift\\ speed\\ (\\sigma_{G(S)} / generation)"),y="Mean fitness")
+
+fit_p2
+```
+
+### Genetic variance ~ shift speed
+
+```{r}
+ggplot(df,aes(x=speed,y=MOE_VG,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  scale_y_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  labs(x="Shift speed",y="Genetic variance")
+```
+
+Scaling by omega
+```{r}
+vp_p<-ggplot(df,aes(x=speed/sdMutation/theta,y=MOE_VG/sdMutation^2,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  scale_y_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  labs(x=TeX("$Shift\\ speed\\ (\\omega\\theta / generation)"),y=TeX("$\\Genetic\\ variance\\ (\\omega^{2})"))
+
+vp_p+theme(legend.position = "inside",legend.position.inside = c(0.8,0.4))
+
+# pdf("Vg_polygenic.pdf",width=4,height=3)
+# vp_p+theme(legend.position = "inside",legend.position.inside = c(0.8,0.3),
+#            legend.text=element_text(size=8),legend.title=element_text(size=8,hjust=.5),
+#            legend.key.size=unit(.2,'cm'),legend.key.width=unit(.4,'cm'))
+# dev.off()
+```
+
+Scaling by sigma_g
+```{r}
+vp_p2<-ggplot(df,aes(x=speed/sqrt(SSE_VG),y=MOE_VG,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  scale_y_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  labs(x=TeX("$Shift\\ speed\\ (\\sigma_{G(S)} / generation)"),y=TeX("$\\Genetic\\ variance"))
+
+vp_p2
+```
+
+
+
+# Summarize mutations
+
+## Summarize fixations
+
+load data
+```{r}
+load("data/processed/muta2.RData")
+```
+
+Take average of every generation at the last 1000 generations and the average of 100 replicates
+```{r}
+moe_fixed_mean<-group_by(moe_fixed,Vs,sdMutation,speedCoef)%>%
+  summarise_at(vars(-replicate),mean,na.rm=T)
+moe_fixed_sd<-group_by(moe_fixed,Vs,sdMutation,speedCoef)%>%
+  summarise_at(vars(-replicate),sd,na.rm=T)
+colnames(moe_fixed_sd)[-c(1:3)]<-paste0(colnames(moe_fixed_sd)[-c(1:3)],"_sd")
+
+moe_fixed2<-left_join(moe_fixed_mean,moe_fixed_sd,by=c("Vs","sdMutation","speedCoef"))
+
+moe_fixed2<-left_join(moe_fixed2,parameters,by=c("Vs","sdMutation"))
+moe_fixed2<-mutate(moe_fixed2,speed=speedCoef*sqrt(SSE_VG),
+                   sigmaOmega2=sdMutation^2/Vs,group=paste0("Vs",Vs,"sd",sdMutation))
+
+so=unique(moe_fixed2$sigmaOmega2)%>%sort
+so=as.character(format(so,scientific = T))%>%unique
+moe_fixed2$sigmaOmega2<-format(moe_fixed2$sigmaOmega2,scientific=T)
+moe_fixed2$sigmaOmega2<-factor(moe_fixed2$sigmaOmega2,level=so,label=so)
+```
+
+### Lag ~ fixed effect
+```{r}
+df_moe_fixed2<-left_join(df,moe_fixed2[,1:(ncol(moe_fixed2)-4)],by=c("Vs","sdMutation","speedCoef"))
+
+lag_effect_p<-ggplot(df_moe_fixed2,aes(x=MOE_gap/sdMutation,y=mean_effect/sdMutation,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10')+
+  labs(x=TeX("$Lag\\ (\\omega)"),y=TeX("$Mean\\ fixed\\ effect\\ size\\ (\\omega)"))
+
+lag_effect_p2<-ggplot(df_moe_fixed2,aes(x=MOE_gap,y=mean_effect,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10')+
+  labs(x="Lag",y="Mean fixed effect size")
+
+ggarrange(lag_effect_p,lag_effect_p2,ncol=1)
+
+```
+
+
+### Fixation number ~ speed
+
+```{r}
+ggplot(moe_fixed2,aes(x=speed,y=n_fixed/1000,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  labs(x="Shift speed",y="Number of fixations")
+
+# non-log x axis
+ggplot(moe_fixed2,aes(x=speed,y=n_fixed/1000,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  labs(x="Shift speed",y="Number of fixations")
+```
+
+Scaling by omega
+```{r}
+fn_p<-ggplot(moe_fixed2,aes(x=speed/sdMutation/theta,y=n_fixed/1000,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  labs(x=TeX("$Shift\\ speed\\ (\\omega\\theta / generation)"),y="Number of fixations")
+
+fn_p
+
+# non-log x axis
+fn_p_nonlog<-ggplot(moe_fixed2,aes(x=speed/sdMutation/theta,y=n_fixed/1000))+
+  stat_poly_line(col="red",linetype="dashed",se=F)+
+  stat_poly_eq(use_label(c("eq", "R2")))+
+  geom_point(aes(col=sigmaOmega2))+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  labs(x=TeX("$Shift\\ speed\\ (\\omega\\theta / generation)"),y="Number of fixations")
+
+fn_p_nonlog
+
+# pdf("output/fixation_number_polygenic.pdf",width=4,height=3)
+# fn_p_nonlog+theme(legend.position = "inside",legend.position.inside = c(0.8,0.3))
+# dev.off()
+```
+
+Scaling by sigma_g
+```{r}
+fn_p2<-ggplot(moe_fixed2,aes(x=speed/sqrt(SSE_VG),y=n_fixed/1000,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  labs(x=TeX("$Shift\\ speed\\ (\\sigma_{G(S)} / generation)"),y="Number of fixations")
+
+fn_p2
+
+# non-log x axis
+ggplot(moe_fixed2,aes(x=speed/sqrt(SSE_VG),y=n_fixed/1000,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  labs(x=TeX("$Shift\\ speed\\ (\\sigma_{G(S)} / generation)"),y="Number of fixations")
+
+```
+
+### Fixation time ~ speed
+
+```{r}
+ggplot(moe_fixed2,aes(x=speed,y=mean_fixedtime,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  scale_y_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  labs(x="Shift speed",y="Fixation time")
+```
+
+Scaling by omega
+```{r}
+ft_p<-ggplot(moe_fixed2,aes(x=speed/sdMutation/theta,y=mean_fixedtime,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  scale_y_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  labs(x=TeX("$Shift\\ speed\\ (\\omega\\theta / generation)"),y="Fixation time")
+
+ft_p
+```
+
+Scaling by sigma_g
+```{r}
+ft_p2<-ggplot(moe_fixed2,aes(x=speed/sqrt(SSE_VG),y=mean_fixedtime,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  scale_y_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  labs(x=TeX("$Shift\\ speed\\ (\\sigma_{G(S)} / generation)"),y="Fixation time")
+
+ft_p2
+```
+
+### Mean fixed effect size ~ speed
+
+```{r}
+ggplot(moe_fixed2,aes(x=speed,y=mean_effect,group=group,col=sigmaOmega2))+
+  geom_hline(aes(yintercept=sdMutation * sqrt(2/pi)))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  scale_y_continuous(trans='log10')+
+  annotate("text",x=0.8,y=0.05 * sqrt(2/pi)+0.005,label=TeX("$\\omega=0.05",output="character"),parse=T)+
+  annotate("text",x=0.8,y=0.1 * sqrt(2/pi)+0.02,label=TeX("$\\omega=0.1",output="character"),parse=T)+
+  annotate("text",x=0.8,y=0.5 * sqrt(2/pi)+0.05,label=TeX("$\\omega=0.5",output="character"),parse=T)+
+  labs(x="Shift speed",y=TeX("$Mean\\ \\alpha\\ of\\ fixations"))
+```
+
+Scaling by omega
+```{r}
+mes_p<-ggplot(moe_fixed2,aes(x=speed/sdMutation/theta,y=mean_effect/sdMutation,group=group,col=sigmaOmega2))+
+  # geom_hline(yintercept=sqrt(2/pi))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  #scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  #scale_y_continuous(trans='log10')+
+  labs(x=TeX("$Shift\\ speed\\ (\\omega\\theta / generation)"),y=TeX("$Mean\\ \\alpha\\ of\\ fixations\\ (\\omega)"))
+
+mes_p
+
+pdf("fixation_effect_polygenic.pdf",width=4,height=3)
+mes_p+theme(legend.position = "inside",legend.position.inside = c(0.8,0.3))
+dev.off()
+```
+
+Scaling by sigma_g
+```{r}
+mes_p2<-ggplot(moe_fixed2,aes(x=speed/sqrt(SSE_VG),y=mean_effect,group=group,col=sigmaOmega2))+
+  # geom_hline(yintercept=sqrt(2/pi))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  scale_y_continuous(trans='log10')+
+  labs(x=TeX("$Shift\\ speed\\ (\\sigma_{G(S)} / generation)"),y=TeX("$Mean\\ \\alpha\\ of\\ fixations"))
+
+mes_p2
+```
+
+### Mean standard deviation of fixed effect size \~ speed
+
+```{r}
+ggplot(moe_fixed2,aes(x=speed,y=sd_effect,group=group,col=sigmaOmega2))+
+  geom_hline(aes(yintercept=sdMutation * sqrt(1-2/pi)))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  scale_y_continuous(trans='log10')+
+  annotate("text",x=0.8,y=0.05 * sqrt(1-2/pi)+0.005,label=TeX("$\\omega=0.05",output="character"),parse=T)+
+  annotate("text",x=0.8,y=0.1 * sqrt(1-2/pi)+0.01,label=TeX("$\\omega=0.1",output="character"),parse=T)+
+  annotate("text",x=0.8,y=0.5 * sqrt(1-2/pi)+0.02,label=TeX("$\\omega=0.5",output="character"),parse=T)+
+  labs(x="Shift speed",y=TeX("$Sd(\\alpha)\\ of\\ fixations"))
+```
+
+Scaling by omega
+```{r}
+sde_p<-ggplot(moe_fixed2,aes(x=speed/sdMutation/theta,y=sd_effect/sdMutation,group=group,col=sigmaOmega2))+
+  # geom_hline(yintercept=sqrt(1-2/pi))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  scale_y_continuous(trans='log10')+
+  labs(x=TeX("$Shift\\ speed\\ (\\omega\\theta / generation)"),y=TeX("$Sd(\\alpha)\\ of\\ fixations\\ (\\omega)"))   
+
+sde_p
+```
+
+Scaling by sigma_g
+```{r}
+sde_p2<-ggplot(moe_fixed2,aes(x=speed/sqrt(SSE_VG),y=sd_effect,group=group,col=sigmaOmega2))+
+  # geom_hline(yintercept=sqrt(1-2/pi))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  scale_y_continuous(trans='log10')+
+  labs(x=TeX("$Shift\\ speed\\ (\\sigma_{G(S)} / generation)"),y=TeX("$Sd(\\alpha)\\ of\\ fixations"))
+       
+sde_p2
+```
+
+
+### Mean positive fixed effect \~ speed
+
+```{r}
+ggplot(moe_fixed2,aes(x=speed,y=mean_posEffect,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  scale_y_continuous(trans='log10')+
+  labs(x="Shift speed",y="Mean positive fixed effect")
+```
+
+Scaling by omega
+```{r}
+ggplot(moe_fixed2,aes(x=speed/sdMutation/theta,y=mean_posEffect/sdMutation,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  scale_y_continuous(trans='log10')+
+  labs(x=TeX("$Shift\\ speed\\ (\\omega\\theta / generation)"),y=TeX("$Mean\\ positive\\ fixed\\ effect\\ (\\omega)"))
+```
+
+### Mean negative fixed effect \~ speed
+
+```{r}
+ggplot(moe_fixed2,aes(x=speed,y=mean_negEffect,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  scale_y_continuous(trans=negativelog_trans(10),breaks=c(0,-0.1,-0.2,-0.4,-0.6))+
+  labs(x="Shift speed",y="Mean negative fixed effect")
+```
+
+Scaling by omega
+```{r}
+ggplot(moe_fixed2,aes(x=speed/sdMutation/theta,y=mean_negEffect/sdMutation,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  scale_y_continuous(trans=negativelog_trans(10),breaks=c(0,-0.25,-0.75,-1))+
+  labs(x=TeX("$Shift\\ speed\\ (\\omega\\theta / generation)"),y=TeX("$Mean\\ negative\\ fixed\\ effect\\ (\\omega)"))
+```
+
+
+## Summarize segregating mutations
+
+Take average of every generation at the last 1000 generations and the average of 100 replicates
+```{r}
+moe_muta_mean<-subset(shift_muta2,generation>19.9*N)%>%
+  group_by(Vs,sdMutation,speedCoef,replicate)%>%
+  summarise_at(vars(-generation),mean,na.rm=T)%>%
+  group_by(Vs,sdMutation,speedCoef)%>%summarise_at(vars(-replicate),mean,na.rm=T)
+moe_muta_sd<-subset(shift_muta2,generation>19.9*N)%>%
+  group_by(Vs,sdMutation,speedCoef,replicate)%>%
+  summarise_at(vars(-generation),mean,na.rm=T)%>%
+  group_by(Vs,sdMutation,speedCoef)%>%summarise_at(vars(-replicate),sd,na.rm=T)
+colnames(moe_muta_sd)[-c(1:3)]<-paste0(colnames(moe_muta_sd)[-c(1:3)],'_sd')
+moe_muta2<-left_join(moe_muta_mean,moe_muta_sd,by=c('Vs','sdMutation','speedCoef'))
+
+moe_muta2<-left_join(moe_muta2,parameters,by=c('Vs','sdMutation'))
+moe_muta2<-mutate(moe_muta2,speed=speedCoef * sqrt(SSE_VG),
+                   sigmaOmega2=sdMutation^2/Vs,
+                   group=paste0("Vs=",Vs,", $\\sigma_{m}=$",sdMutation))
+
+so=unique(moe_muta2$sigmaOmega2)%>%sort
+so=as.character(format(so,scientific = T))%>%unique
+moe_muta2$sigmaOmega2<-format(moe_muta2$sigmaOmega2,scientific=T)
+moe_muta2$sigmaOmega2<-factor(moe_muta2$sigmaOmega2,level=so,label=so)
+```
+
+### Segregating number ~ speed
+
+```{r}
+ggplot(moe_muta2,aes(x=speed,y=n_segregations,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  labs(x="Shift speed",y="Number of segregating sites")
+```
+
+Scaling by omega
+```{r}
+sn_p<-ggplot(moe_muta2,aes(x=speed/sdMutation/theta,y=n_segregations,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  labs(x=TeX("$Shift\\ speed\\ (\\omega\\theta / generation)"),y="Number of segregating sites")
+
+sn_p
+
+pdf("segregating_number_polygenic.pdf",width=4,height=3)
+sn_p+theme(legend.position = "inside",legend.position.inside = c(0.4,0.3),
+           legend.text=element_text(size=8),legend.title=element_text(size=8,hjust=.5),
+           legend.key.size=unit(.2,'cm'),legend.key.width=unit(.4,'cm'))
+dev.off()
+```
+
+Scaling by sigma_g
+```{r}
+sn_p2<-ggplot(moe_muta2,aes(x=speed/sqrt(SSE_VG),y=n_segregations,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  labs(x=TeX("$Shift\\ speed\\ (\\sigma_{G(S)} / generation)"),y="Number of segregating sites")
+
+sn_p2
+```
+
+### Proportion of positive segregating mutations ~ speed
+
+```{r}
+ggplot(moe_muta2,aes(x=speed,y=n_posSegregations/n_segregations,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  scale_y_continuous(labels=percent)+
+  labs(x="Shift speed",y="Proportion of positive segregating mutations")
+```
+
+Scaling by omega
+```{r}
+ggplot(moe_muta2,aes(x=speed/sdMutation/theta,y=n_posSegregations/n_segregations,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  scale_y_continuous(labels=percent)+
+  labs(x=TeX("$Shift\\ speed\\ (\\omega\\theta / generation)"),y="Proportion of positive segregating mutations")
+```
+
+Scaling by sigma_g
+```{r}
+ggplot(moe_muta2,aes(x=speed/sqrt(SSE_VG),y=n_posSegregations/n_segregations,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  scale_y_continuous(labels=percent)+
+  labs(x=TeX("$Shift\\ speed\\ (\\sigma_{G(S)} / generation)"),y="Proportion of positive segregating mutations")
+```
+
+### Mean segregating effect size ~ speed
+
+```{r}
+ggplot(moe_muta2,aes(x=speed,y=mean_effect,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  scale_y_continuous(trans='log10')+
+  labs(x="Shift speed",y=TeX("$Mean\\ \\alpha\\ of\\ segregating\\ sites"))
+```
+
+Scaling by omega
+```{r}
+mse_p<-ggplot(moe_muta2,aes(x=speed/sdMutation/theta,y=mean_effect/sdMutation,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  scale_y_continuous(trans='log10')+
+  labs(x=TeX("$Shift\\ speed\\ (\\omega\\theta / generation)"),y=TeX("$Mean\\ \\alpha\\ of\\ segregating\\ sites\\ (\\omega)"))
+
+mse_p
+
+pdf("segregating_effect_polygenic.pdf",width=4,height=3)
+mse_p+theme(legend.position = "inside",legend.position.inside = c(0.8,0.35),
+           legend.text=element_text(size=8),legend.title=element_text(size=8,hjust=.5),
+           legend.key.size=unit(.2,'cm'),legend.key.width=unit(.4,'cm'))
+dev.off()
+```
+
+Scaling by sigma_g
+```{r}
+mse_p2<-ggplot(moe_muta2,aes(x=speed/sqrt(SSE_VG),y=mean_effect,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  scale_y_continuous(trans='log10')+
+  labs(x=TeX("$Shift\\ speed\\ (\\sigma_{G(S)} / generation)"),y=TeX("$Mean\\ \\alpha\\ of\\ segregating\\ sites"))
+
+mse_p2
+```
+
+### Mean positive segregating effect ~ speed
+
+```{r}
+ggplot(moe_muta2,aes(x=speed,y=mean_posEffect,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  scale_y_continuous(trans='log10')+
+  labs(x="Shift speed",y="Mean positive segregating effect")
+```
+
+Scaled by omega
+```{r}
+ggplot(moe_muta2,aes(x=speed/sdMutation/theta,y=mean_posEffect/sdMutation,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  scale_y_continuous(trans='log10')+
+  labs(x=TeX("$Shift\\ speed\\ (\\omega\\theta / generation)"),y=TeX("$Mean\\ positive\\ segregating\\ effect\\ (\\omega)"))
+```
+
+Scaled by sigma_g
+```{r}
+ggplot(moe_muta2,aes(x=speed/sqrt(SSE_VG),y=mean_posEffect,group=group,col=sigmaOmega2))+
+  geom_point()+
+ geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  scale_y_continuous(trans='log10')+
+  labs(x=TeX("$Shift\\ speed\\ (\\sigma_{G(S)} / generation)"),y=TeX("$Mean\\ positive\\ segregating\\ effect"))
+```
+
+### Mean negative effect ~ speed
+
+```{r}
+ggplot(moe_muta2,aes(x=speed,y=mean_negEffect,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  scale_y_continuous(trans=negativelog_trans(10))+
+  labs(x="Shift speed",y="Mean negative segregating effect")
+```
+
+Scaled by omega
+```{r}
+ggplot(moe_muta2,aes(x=speed/sdMutation/theta,y=mean_negEffect/sdMutation,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  scale_y_continuous(trans=negativelog_trans(10))+
+  labs(x=TeX("$Shift\\ speed\\ (\\omega\\theta / generation)"),y=TeX("$Mean\\ negative\\ segregating\\ effect\\ (\\omega)"))
+```
+
+Scaled by sigma_g
+```{r}
+ggplot(moe_muta2,aes(x=speed/sqrt(SSE_VG),y=mean_negEffect,group=group,col=sigmaOmega2))+
+  geom_point()+
+  geom_line()+
+  scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+
+  scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+
+  scale_y_continuous(trans=negativelog_trans(10))+
+  labs(x=TeX("$Shift\\ speed\\ (\\sigma_{G(S)} / generation)"),y="Mean negative segregating effect")
+```
+
+
+<!-- ### Weighted mean segregating effect size ~ speed -->
+
+<!-- ```{r} -->
+<!-- load("summ_weighted.RData") -->
+
+<!-- moe_muta_weightedMeanSd<-left_join(moe_muta_weightedMeanSd,parameters,by=c('Vs','sdMutation')) -->
+<!-- moe_muta_weightedMeanSd<-mutate(moe_muta_weightedMeanSd,speed=speedCoef * sqrt(SSE_VG), -->
+<!--                    sigmaOmega2=sdMutation^2/Vs, -->
+<!--                    group=paste0("Vs=",Vs,", $\\sigma_{m}=$",sdMutation)) -->
+
+<!-- so=unique(moe_muta_weightedMeanSd$sigmaOmega2)%>%sort -->
+<!-- so=as.character(format(so,scientific = T))%>%unique -->
+<!-- moe_muta_weightedMeanSd$sigmaOmega2<-format(moe_muta_weightedMeanSd$sigmaOmega2,scientific=T) -->
+<!-- moe_muta_weightedMeanSd$sigmaOmega2<-factor(moe_muta_weightedMeanSd$sigmaOmega2,level=so,label=so) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- ggplot(moe_muta_weightedMeanSd,aes(x=speed,y=mean_effect,group=group,col=sigmaOmega2))+ -->
+<!--   geom_point()+ -->
+<!--   geom_line()+ -->
+<!--   scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+ -->
+<!--   scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+ -->
+<!--   scale_y_continuous(trans='log10')+ -->
+<!--   labs(x="Shift speed",y=TeX("$Mean\\ \\alpha\\ of\\ segregating\\ sites")) -->
+<!-- ``` -->
+
+<!-- Scaling by omega -->
+<!-- ```{r} -->
+<!-- ggplot(moe_muta_weightedMeanSd,aes(x=speed/sdMutation/theta,y=mean_effect/sdMutation,group=group,col=sigmaOmega2))+ -->
+<!--   geom_point()+ -->
+<!--   geom_line()+ -->
+<!--   scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+ -->
+<!--   scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+ -->
+<!--   scale_y_continuous(trans='log10')+ -->
+<!--   labs(x=TeX("$Shift\\ speed\\ (\\omega\\theta / generation)"),y=TeX("$Mean\\ \\alpha\\ of\\ segregating\\ sites\\ (\\omega)")) -->
+<!-- ``` -->
+
+<!-- Scaling by sigma_g -->
+<!-- ```{r} -->
+<!-- ggplot(moe_muta_weightedMeanSd,aes(x=speed/sqrt(SSE_VG),y=mean_effect,group=group,col=sigmaOmega2))+ -->
+<!--   geom_point()+ -->
+<!--   geom_line()+ -->
+<!--   scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+ -->
+<!--   scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+ -->
+<!--   scale_y_continuous(trans='log10')+ -->
+<!--   labs(x=TeX("$Shift\\ speed\\ (\\sigma_{G(S)} / generation)"),y=TeX("$Mean\\ \\alpha\\ of\\ segregating\\ sites")) -->
+<!-- ``` -->
+
+<!-- ### Weighted standard deviation of segregating effect size ~ speed -->
+
+<!-- ```{r} -->
+<!-- ggplot(moe_muta_weightedMeanSd,aes(x=speed,y=sd_effect,group=group,col=sigmaOmega2))+ -->
+<!--   geom_point()+ -->
+<!--   geom_line()+ -->
+<!--   scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+ -->
+<!--   scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+ -->
+<!--   scale_y_continuous(trans='log10')+ -->
+<!--   labs(x="Shift speed",y=TeX("$Sd(\\alpha)\\ of\\ segregating\\ sites")) -->
+<!-- ``` -->
+
+<!-- Scaling by omega -->
+<!-- ```{r} -->
+<!-- ggplot(moe_muta_weightedMeanSd,aes(x=speed/sdMutation/theta,y=sd_effect/sdMutation,group=group,col=sigmaOmega2))+ -->
+<!--   geom_point()+ -->
+<!--   geom_line()+ -->
+<!--   scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+ -->
+<!--   scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+ -->
+<!--   scale_y_continuous(trans='log10')+ -->
+<!--   labs(x=TeX("$Shift\\ speed\\ (\\omega\\theta / generation)"),y=TeX("$Sd(\\alpha)\\ of\\ segregating\\ sites\\ (\\omega)")) -->
+<!-- ``` -->
+
+<!-- Scaling by sigma_g -->
+<!-- ```{r} -->
+<!-- ggplot(moe_muta_weightedMeanSd,aes(x=speed/sqrt(SSE_VG),y=sd_effect,group=group,col=sigmaOmega2))+ -->
+<!--   geom_point()+ -->
+<!--   geom_line()+ -->
+<!--   scale_color_viridis_d(name=TeX("$\\chi"),begin=0,end=0.9)+ -->
+<!--   scale_x_continuous(trans='log10',labels=trans_format("log10", math_format(10^.x)))+ -->
+<!--   scale_y_continuous(trans='log10')+ -->
+<!--   labs(x=TeX("$Shift\\ speed\\ (\\sigma_{G(S)} / generation)"),y=TeX("$Sd(\\alpha)\\ of\\ segregating\\ sites")) -->
+<!-- ``` -->
+

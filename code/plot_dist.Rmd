@@ -1,0 +1,702 @@
+---
+title: "Effect size distribution of mutations"
+author: "Yuna"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+date: '2024-07-02'
+---
+
+```{r setup, include=FALSE}
+options(tinytex.verbose = TRUE)
+knitr::opts_chunk$set(echo = T,message =  F,warning=F,results = "hide")
+```
+
+### Working path
+
+```{r}
+setwd("/projects/ag-stetter/yzhang44/simulation/")
+```
+
+### Library packages
+
+```{r}
+library(DBI)
+library(RSQLite)
+library(dplyr)
+library(reshape2)
+library(ggplot2)
+library(latex2exp)
+library(ggpubr)# multiple figures in a page
+library(scales)
+library(cowplot)# get_legend() & plot_grid() functions
+library(wesanderson)
+library(stringr)
+```
+
+### Global plotting settings
+
+```{r}
+theme_set(theme_classic())
+theme_update(text=element_text(size=13),plot.title=element_text(size=13),
+             legend.text=element_text(size=10),legend.title=element_text(size=10,hjust=.5),
+             legend.key.size=unit(.3,'cm'),
+             legend.key.width=unit(.6,'cm'),
+             legend.spacing=unit(0,'cm'),
+             legend.background = element_rect(color="grey",fill=NA))
+
+label_sdMutation<-function(string){TeX(paste("$\\omega : $",string))}
+
+negativelog_trans <- function(base = exp(1)) {
+    trans <- function(x) log(-x, base)
+    inv <- function(x) -base^x
+    trans_new(paste0("reverselog_", format(base)), transform = trans, inverse=inv)
+}
+```
+
+
+## Effect size distribution of fixations
+
+### case from trait of Vs=1 & sigma_m=0.05
+```{r}
+N=10000
+Vs=1
+sd=0.05
+
+sse_fixedMuta100<-data.frame()
+for(replicate in 1:100){
+  fixedMuta<-read.table(paste0("Vs",Vs,"sd",sd,"/burn_in/fixedMuta_",replicate,".txt"),
+                        colClasses=c("integer","NULL","NULL","numeric","integer","integer"),
+                        col.names=c("replicate","id","position","effectSize","aroseTick","endTick"))
+  sse_fixedMuta100<-rbind(sse_fixedMuta100,fixedMuta)
+}
+
+speedCoef=0.5
+moe_fixedMuta100<-data.frame()
+for(replicate in 1:100){
+  fixedMuta<-read.table(paste0("Vs",Vs,"sd",sd,"/gradual/fixedMuta_",speedCoef,"_",replicate,".txt"),
+                        colClasses=c("integer","NULL","NULL","numeric","integer","integer"),
+                        col.names=c("replicate","id","position","effectSize","aroseTick","endTick"))
+  moe_fixedMuta100<-rbind(moe_fixedMuta100,fixedMuta)
+}
+moe_fixedMuta100$period<-ifelse(moe_fixedMuta100$endTick>10.1*N,"0.1-10N",
+                                ifelse(moe_fixedMuta100$endTick>10.05*N,"0.05-0.1N",
+                                       ifelse(moe_fixedMuta100$endTick>10.02*N,"0.02-0.05",
+                                              ifelse(moe_fixedMuta100$endTick>10.01*N,"0.01-0.02N","0-0.01N"))))
+
+# overall distribution
+plot(density(moe_fixedMuta100$effectSize),col='red',ylim=c(0,30),main='Distribution of effect size',xlab='Effect size',lwd=2)
+lines(density(sse_fixedMuta100$effectSize),lty=2,lwd=2)
+lines(seq(-1,1,length=1000),dnorm(seq(-1,1,length=1000),0,0.05),lty=3,lwd=2)
+legend(0.15,30,legend=c("Moving optimum","Fixed optimum","Supply"),lty=1:3,col=c('red','black','black'),lwd=2)
+
+# different periods
+ggplot()+
+  geom_density(data=moe_fixedMuta100,aes(x=effectSize,col=period))+
+  # facet_grid(period~.)+
+  geom_density(data=sse_fixedMuta100,aes(x=effectSize),col='black',linetype='dashed')+
+  geom_line(data=data.frame(x=seq(-0.1,0.3,length=500),y=dnorm(seq(-0.1,0.3,length=500),0,0.05)),aes(x,y),linetype='dotted')+
+  labs(x="Effect size",y="Density",col='Period')
+
+# different periods with fixations arisen before shift or not
+ggplot()+
+  geom_density(data=moe_fixedMuta100,aes(x=effectSize,fill=aroseTick>10*N,col=aroseTick>10*N),alpha=.2)+
+  facet_grid(period~.)+
+  geom_density(data=sse_fixedMuta100,aes(x=effectSize),col='black',linetype='dashed')+
+  geom_line(data=data.frame(x=seq(-0.1,0.3,length=500),y=dnorm(seq(-0.1,0.3,length=500),0,0.05)),aes(x,y),linetype='dotted')+
+  labs(x="Effect size",y="Density",fill="After shift",col='After shift')
+```
+
+### effect size distribution of all fixations
+```{r}
+singleTrait_db<-dbConnect(RSQLite::SQLite(),dbname="~/shortcut/B6/simulation/singleTrait.sqlite")
+on.exit(dbDisconnect(singleTrait_db))
+
+dbListTables(singleTrait_db)
+
+parameters<-tbl(singleTrait_db,"parameters")%>%as.data.frame
+sse_fixedmuta<-tbl(singleTrait_db,"burnin_fixedMuta")%>%as.data.frame  #15016
+moe_fixedMuta<-tbl(singleTrait_db,"gradual_fixedMuta")
+# moe_fixedMuta<-as.data.frame(moe_fixedMuta)
+moe_fixedMuta1<-filter(moe_fixedMuta,replicate==1)%>%as.data.frame  # 2073928
+moe_fixedMuta1<-left_join(moe_fixedMuta1,parameters,by=c("Vs","sdMutation"))
+moe_fixedMuta1<-mutate(moe_fixedMuta1,speed=speedCoef*sqrt(SSE_VG))
+
+
+summ<-group_by(moe_fixedMuta1,Vs,sdMutation,speed/sdMutation)%>%
+  summarise(n_fixed=n())
+
+supply_def<-rbind(data.frame(effectSize=seq(-2,2,length=500),density=dnorm(seq(-2,2,length=500),mean=0,sd=0.05),sdMutation=0.05),
+                  data.frame(effectSize=seq(-2,2,length=500),density=dnorm(seq(-2,2,length=500),mean=0,sd=0.1),sdMutation=0.1),
+                  data.frame(effectSize=seq(-2,2,length=500),density=dnorm(seq(-2,2,length=500),mean=0,sd=0.5),sdMutation=0.5))
+supply_def<-rbind(data.frame(supply_def,Vs=1),
+                  data.frame(supply_def,Vs=10),
+                  data.frame(supply_def,Vs=100))
+
+ggplot()+
+  geom_area(data=supply_def,aes(x=effectSize,y=density),fill='snow3')+
+  geom_density(data=sse_fixedmuta,aes(x=effectSize))+
+  facet_grid(Vs~sdMutation,labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)))+
+  scale_x_continuous(limits=c(-0.5,1.5))+
+  labs(x="Effect size",y="Density")
+
+pal <- wes_palette("Zissou1", 100, type = "continuous")
+
+ggplot()+
+  geom_density(data=moe_fixedMuta1,aes(x=effectSize,group=speedCoef,col=speed/sdMutation),trim=T)+
+  scale_color_gradientn(colours = pal)+
+  facet_grid(Vs~sdMutation,labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)))+
+  scale_x_continuous(limits=c(-0.5,1.5))+
+  labs(x="Effect size",y="Density",col=TeX("$Speed\\ (\\sigma_m)"))
+
+ggplot()+
+  geom_area(data=supply_def,aes(x=effectSize,y=density),fill='snow3')+
+  geom_density(data=sse_fixedmuta,aes(x=effectSize))+
+  geom_density(data=moe_fixedMuta1,aes(x=effectSize,group=speedCoef,col=speed/sdMutation),trim=T)+
+  scale_color_gradientn(colours = pal)+
+  facet_wrap(Vs~sdMutation,scales="free",labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)))+
+  scale_x_continuous(limits=c(-0.5,1.5))+
+  labs(x="Effect size",y="Density",col=TeX("$Speed\\ (\\sigma_m)"))
+
+
+ggplot()+
+  geom_density(data=moe_fixedMuta1,aes(x=effectSize/sdMutation,col=factor(round(speed/sdMutation,2))))+
+  geom_density(data=sse_fixedmuta,aes(x=effectSize/sdMutation),linetype='dashed')+
+  geom_line(data=supply_def,aes(x=effectSize/sdMutation,y=density*sdMutation),linetype='dotted')+
+  facet_grid(Vs~sdMutation)
+
+ggplot(supply_def,aes(x=effectSize/sdMutation,y=density*sdMutation))+
+  geom_line()+
+  facet_wrap(Vs~sdMutation,scales='free')
+
+
+
+moe_fixedMuta_Vs100sd0.05<-filter(moe_fixedMuta,Vs==100 & sdMutation==0.05)%>%as.data.frame
+moe_fixedMuta_Vs100sd0.05<-left_join(moe_fixedMuta_Vs100sd0.05,parameters,by=c("Vs","sdMutation"))
+moe_fixedMuta_Vs100sd0.05<-mutate(moe_fixedMuta_Vs100sd0.05,speed=speedCoef*sqrt(SSE_VG))
+ggplot(moe_fixedMuta_Vs100sd0.05,aes(x=effectSize,col=factor(round(speed/sdMutation,2))))+
+  geom_density()
+
+moe_fixedMuta_Vs1sd0.5<-filter(moe_fixedMuta,Vs==1 & sdMutation==0.5)%>%as.data.frame
+moe_fixedMuta_Vs1sd0.5<-left_join(moe_fixedMuta_Vs1sd0.5,parameters,by=c("Vs","sdMutation"))
+moe_fixedMuta_Vs1sd0.5<-mutate(moe_fixedMuta_Vs1sd0.5,speed=speedCoef*sqrt(SSE_VG))
+ggplot(moe_fixedMuta_Vs1sd0.5,aes(x=effectSize,col=factor(round(speed/sdMutation,2))))+
+  geom_density()
+```
+
+
+
+## Effect size distribution of segregating mutations
+
+### Supply distribution vs. stabilizing selection
+```{r}
+singleTrait_db<-dbConnect(RSQLite::SQLite(),dbname="~/shortcut/B6/simulation/singleTrait.sqlite")
+on.exit(dbDisconnect(singleTrait_db))
+
+dbListTables(singleTrait_db)
+
+N=10000
+
+parameters<-tbl(singleTrait_db,"parameters")%>%as.data.frame
+
+sse_muta<-tbl(singleTrait_db,"burnin_muta")%>%
+  filter(generation==10*N)%>%as.data.frame     # 189432
+
+supply_def<-rbind(data.frame(effectSize=seq(-2,2,length=500),density=dnorm(seq(-2,2,length=500),mean=0,sd=0.05),sdMutation=0.05),
+                  data.frame(effectSize=seq(-2,2,length=500),density=dnorm(seq(-2,2,length=500),mean=0,sd=0.1),sdMutation=0.1),
+                  data.frame(effectSize=seq(-2,2,length=500),density=dnorm(seq(-2,2,length=500),mean=0,sd=0.5),sdMutation=0.5))
+supply_def<-rbind(data.frame(supply_def,Vs=1),
+                  data.frame(supply_def,Vs=10),
+                  data.frame(supply_def,Vs=100))
+
+# without weights of allelic frequency
+ggplot()+
+    geom_area(data=supply_def,aes(x=effectSize,y=density),fill='snow3')+
+    geom_density(data=sse_muta,aes(x=effectSize))+
+    facet_grid(Vs~sdMutation,labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)))+
+    scale_x_continuous(limits=c(-0.5,1.5))+
+  labs(x="Effect size",y="Density")
+
+
+# with weights of allelic frequency
+sse_weighted_density<-split(sse_muta,paste0(sse_muta$Vs,"_",sse_muta$sdMutation))%>%
+  lapply(FUN=function(x){density(x$effectSize,weights=x$frequency/sum(x$frequency))})
+
+sse_muta_density<-data.frame()
+for(i in 1:length(sse_weighted_density)){
+  Vs = word(names(sse_weighted_density[i]),1,sep="_")
+  sdMutation = word(names(sse_weighted_density[i]),2,sep="_")
+  
+  df<-data.frame(Vs=Vs,sdMutation=sdMutation,effectSize=sse_weighted_density[[i]]$x,density=sse_weighted_density[[i]]$y)
+  sse_muta_density<-rbind(sse_muta_density,df)
+}
+sse_muta_density<-mutate_at(sse_muta_density,.vars = c("Vs","sdMutation"),.funs = as.numeric)
+
+ggplot()+
+  geom_area(data=supply_def,aes(x=effectSize,y=density),fill='snow3')+
+  geom_line(data=sse_muta_density,aes(x=effectSize,y=density))+
+  facet_grid(Vs~sdMutation,labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)))+
+  # scale_x_continuous(limits=c(-0.5,1.5))+
+  labs(x="Effect size",y="Density")
+```
+
+```{r}
+moe_muta<-tbl(singleTrait_db,"gradual_muta")%>%
+  filter(generation==20*N)%>%as.data.frame
+
+ # moe_muta<-left_join(moe_muta,parameters,by=c("Vs","sdMutation"))
+# moe_muta<-mutate(moe_muta,speed=speedCoef*sqrt(SSE_VG))
+
+pal <- wes_palette("Zissou1", 100, type = "continuous")
+
+ggplot()+
+  geom_density(data=moe_muta,aes(x=effectSize,group=speedCoef,col=speed/sdMutation),trim=T)+
+  scale_color_gradientn(colours = pal)+
+  facet_grid(Vs~sdMutation,labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)))+
+  scale_x_continuous(limits=c(-0.5,1.5))+
+  labs(x="Effect size",y="Density",col=TeX("$Speed\\ (\\sigma_m)"))
+
+ggplot()+
+  geom_area(data=supply_def,aes(x=effectSize,y=density),fill='snow3')+
+  geom_density(data=sse_muta,aes(x=effectSize))+
+  geom_density(data=moe_muta,aes(x=effectSize,group=speedCoef,col=speed/sdMutation),trim=T)+
+  scale_color_gradientn(colours = pal)+
+  facet_wrap(Vs~sdMutation,scales="free",labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)))+
+  scale_x_continuous(limits=c(-0.5,1.5))+
+  labs(x="Effect size",y="Density",col=TeX("$Speed\\ (\\sigma_m)"))
+
+
+# with weights of allelic frequency
+moe_weighted_density<-split(moe_muta,paste0(moe_muta$Vs,"_",moe_muta$sdMutation,"_",moe_muta$speedCoef))%>%
+  lapply(FUN=function(x){density(x$effectSize,weights=x$frequency/sum(x$frequency))})
+
+moe_muta_density<-data.frame()
+for(i in 1:length(moe_weighted_density)){
+  Vs = word(names(moe_weighted_density[i]),1,sep="_")
+  sdMutation = word(names(moe_weighted_density[i]),2,sep="_")
+  speedCoef = word(names(moe_weighted_density[i]),3,sep="_")
+  
+  df<-data.frame(Vs=Vs,sdMutation=sdMutation,speedCoef=speedCoef,effectSize=moe_weighted_density[[i]]$x,density=moe_weighted_density[[i]]$y)
+  moe_muta_density<-rbind(moe_muta_density,df)
+}
+moe_muta_density<-mutate_at(moe_muta_density,.vars = c("Vs","sdMutation","speedCoef"),.funs = as.numeric)
+
+moe_muta_density<-left_join(moe_muta_density,parameters,by=c("Vs","sdMutation"))
+moe_muta_density<-mutate(moe_muta_density,speed=speedCoef*sqrt(SSE_VG))
+
+ggplot()+
+  geom_area(data=supply_def,aes(x=effectSize,y=density),fill='snow3')+
+  geom_line(data=sse_muta_density,aes(x=effectSize,y=density))+
+  geom_line(data=moe_muta_density,aes(x=effectSize,y=density,group=speedCoef,col=speed/sdMutation))+
+  scale_color_gradientn(colours = pal)+
+  facet_wrap(Vs~sdMutation,scales="free",labeller=labeller(Vs=label_both,sdMutation=as_labeller(label_sdMutation,label_parsed)))+
+  # scale_x_continuous(limits=c(-0.5,1.5))+
+  labs(x="Effect size",y="Density",col=TeX("$Speed\\ (\\sigma_m)"))
+```
+
+
+### Mean and sd. of the effect sizes of segregating site (with allelic frequencies)
+```{r}
+sse_muta_weightedMean<-split(sse_muta,paste0(sse_muta$Vs,"_",sse_muta$sdMutation))%>%
+  lapply(FUN=function(x){
+    mean_effect<-sum(x$frequency * x$effectSize) / sum(x$frequency)
+    sd_effect<-sqrt(sum(x$frequency * (x$effectSize - mean_effect)^2) / sum(x$frequency))
+    return(c(mean_effect,sd_effect))
+  })
+
+sse_weightedMeanSd<-data.frame()
+for(i in 1:length(sse_muta_weightedMean)){
+  Vs = word(names(sse_muta_weightedMean[i]),1,sep="_")
+  sdMutation = word(names(sse_muta_weightedMean[i]),2,sep="_")
+  
+  df<-data.frame(Vs=Vs,sdMutation=sdMutation,mean_effect=sse_muta_weightedMean[[i]][1],sd_effect=sse_muta_weightedMean[[i]][2])
+  sse_weightedMeanSd<-rbind(sse_weightedMeanSd,df)
+}
+sse_weightedMeanSd<-mutate_at(sse_weightedMeanSd,.vars = c("Vs","sdMutation"),.funs = as.numeric)
+
+###
+paras
+moe_muta_weightedMean<-tbl(singleTrait_db,"gradual_muta")%>%
+  filter(generation>19.9*N)%>%
+  group_by(Vs,sdMutation,speedCoef)%>%
+  summarise(mean_effect=sum(frequency * effectSize)/ sum(frequency))
+moe_muta_weightedMean<-as.data.frame(moe_muta_weightedMean)
+
+moe_muta_weightedMean<-split(moe_muta,paste0(moe_muta$Vs,"_",moe_muta$sdMutation,"_",moe_muta$speedCoef))%>%
+  lapply(FUN=function(x){
+    mean_effect<-sum(x$frequency * x$effectSize) / sum(x$frequency)
+    sd_effect<-sqrt(sum(x$frequency * (x$effectSize - mean_effect)^2) / sum(x$frequency))
+    return(c(mean_effect,sd_effect))
+  })
+
+moe_weightedMeanSd<-data.frame()
+for(i in 1:length(moe_muta_weightedMean)){
+  Vs = word(names(moe_muta_weightedMean[i]),1,sep="_")
+  sdMutation = word(names(moe_muta_weightedMean[i]),2,sep="_")
+  speedCoef = word(names(moe_muta_weightedMean[i]),3,sep="_")
+  
+  df<-data.frame(Vs=Vs,sdMutation=sdMutation,speedCoef=speedCoef,mean_effect=moe_muta_weightedMean[[i]][1],sd_effect=moe_muta_weightedMean[[i]][2])
+  moe_weightedMeanSd<-rbind(moe_weightedMeanSd,df)
+}
+moe_weightedMeanSd<-mutate_at(moe_weightedMeanSd,.vars = c("Vs","sdMutation","speedCoef"),.funs = as.numeric)
+moe_weightedMeanSd<-left_join(moe_weightedMeanSd,parameters,by=c("Vs","sdMutation"))%>%
+  mutate(speed=speedCoef * sqrt(SSE_VG),
+         sigmaOmega2=sdMutation^2/2/Vs,
+         group=paste0("Vs=",Vs,", $\\sigma_{m}=$",sdMutation))
+
+so=unique(moe_weightedMeanSd$sigmaOmega2)%>%sort
+so=as.character(format(so,scientific = T))
+so[5:6]<-c("1.25e-03_a","1.25e-03_b")
+
+moe_weightedMeanSd$sigmaOmega2<-format(moe_weightedMeanSd$sigmaOmega2,scientific=T)
+
+moe_weightedMeanSd[which(moe_weightedMeanSd$Vs==1 & moe_weightedMeanSd$sdMutation==0.05),"sigmaOmega2"]<-"1.25e-03_a"
+moe_weightedMeanSd[which(moe_weightedMeanSd$Vs==100 & moe_weightedMeanSd$sdMutation==0.5),"sigmaOmega2"]<-"1.25e-03_b"
+moe_weightedMeanSd$sigmaOmega2<-factor(moe_weightedMeanSd$sigmaOmega2,level=so,label=so)
+
+save(sse_weightedMeanSd,moe_weightedMeanSd,file="muta_weightedMeanSd.RData")
+```
+
+### Weighted mean vs. nonweighted mean (last 1000 generations) vs. nonweighted mean at 20N generation
+```{r}
+load("muta2(fill0).RData")
+load("muta_weightedMeanSd.RData")
+moe_weightedMeanSd_20N<-moe_weightedMeanSd
+sse_weightedMeanSd_20N<-sse_weightedMeanSd
+rm(moe_weightedMeanSd,sse_weightedMeanSd)
+load("summ_weighted.RData")
+
+N=10000 
+
+# mean at 20 N generation
+moe_muta_mean20N<-subset(shift_muta2,generation==20*N)%>%
+  group_by(Vs,sdMutation,speedCoef,replicate)%>%
+  summarise_at(vars(-generation),mean,na.rm=T)%>%
+  group_by(Vs,sdMutation,speedCoef)%>%summarise_at(vars(-replicate),mean,na.rm=T)
+
+# mean during 19.9 ~ 20 N generation
+moe_muta_mean<-subset(shift_muta2,generation>19.9*N)%>%
+  group_by(Vs,sdMutation,speedCoef,replicate)%>%
+  summarise_at(vars(-generation),mean,na.rm=T)%>%
+  group_by(Vs,sdMutation,speedCoef)%>%summarise_at(vars(-replicate),mean,na.rm=T)
+
+colnames(moe_muta_mean20N)[5]<-"mean_effect20N"
+colnames(moe_weightedMeanSd_20N)[4]<-"weighted_mean_effect"
+
+joint_df<-left_join(moe_weightedMeanSd_20N[,c("Vs","sdMutation","speedCoef","weighted_mean_effect","sd_effect")],
+                    moe_muta_mean[,c("Vs","sdMutation","speedCoef","mean_effect")],by=c("Vs","sdMutation","speedCoef"))%>%left_join(moe_muta_mean20N[,c("Vs","sdMutation","speedCoef","mean_effect20N")],by=c("Vs","sdMutation","speedCoef"))
+joint_df<-left_join(joint_df,parameters,by=c("Vs","sdMutation"))%>%
+  mutate(speed=speedCoef * sqrt(SSE_VG),
+         sigmaOmega2=sdMutation^2/2/Vs,
+         group=paste0("Vs=",Vs,", $\\sigma_{m}=$",sdMutation))
+
+ggplot(joint_df,aes(x=mean_effect20N,y=weighted_mean_effect,group=group,col=factor(sigmaOmega2)))+
+  geom_point()+
+  geom_abline(slope=1,intercept=0)+
+  labs(x="at 20N",y="weighted")
+ggplot(joint_df,aes(x=mean_effect,y=weighted_mean_effect,group=group,col=factor(sigmaOmega2)))+
+  geom_point()+
+  geom_abline(slope=1,intercept=0)+
+  labs(x="last 1000 generations",y="weighted")
+ggplot(joint_df,aes(x=mean_effect,y=mean_effect20N,group=group,col=factor(sigmaOmega2)))+
+  geom_point()+
+  geom_abline(slope=1,intercept=0)+
+  labs(x="last 1000 generations",y="at 20N")
+```
+
+### Weighted mean of the last 1000 generations vs. mean of the weighted mean of the last 1000 generations 
+```{r}
+head(moe_muta_weightedMeanSd_generation)
+ggplot(moe_muta_weightedMeanSd_generation,aes(x=generation,y=mean_effect,group=speedCoef,col=speedCoef))+
+  geom_line()+
+  facet_wrap(Vs~sdMutation,scales='free')
+
+# group_by(moe_muta_weightedMeanSd_generation,Vs,sdMutation,speedCoef)%>%
+#   summarise(var_amongGeneration=var(mean_effect))%>%ungroup%>%select(var_amongGeneration)%>%unlist
+
+# mean of the summary statistics of the last 1000 generations
+mean_effect_amongGeneration<-group_by(moe_muta_weightedMeanSd_generation,Vs,sdMutation,speedCoef)%>%
+  summarise(mean_effect=mean(mean_effect),sd_effect=mean(sd_effect))
+
+weighted1000_vs_mean1000<-left_join(mean_effect_amongGeneration,moe_muta_weightedMeanSd,by=c("Vs","sdMutation","speedCoef"))
+
+plot(weighted1000_vs_mean1000$mean_effect.x,weighted1000_vs_mean1000$mean_effect.y)
+abline(0,1)
+plot(weighted1000_vs_mean1000$sd_effect.x,weighted1000_vs_mean1000$sd_effect.y)
+abline(0,1)
+```
+They are very closed. So,use weighted mean of the last 1000 generations
+
+### weighted mean of the last 1000 generations vs. weighted mean of the last generation
+```{r}
+last1000_vs_last<-left_join(moe_weightedMeanSd_20N,moe_muta_weightedMeanSd,by=c('Vs','sdMutation','speedCoef'))
+
+plot(sqrt(last1000_vs_last$sd_effect.x) , last1000_vs_last$sd_effect.y)
+abline(0,1)
+```
+Few points are a bit off in the high sd_effect region. So, use the weighted mean of the last 1000 generations
+
+### weighted mean vs. unweighted mean of the last 1000 generations
+```{r}
+weighted_vs_unweighted<-left_join(moe_muta_mean,moe_muta_weightedMeanSd,by=c('Vs','sdMutation','speedCoef'))
+
+plot(weighted_vs_unweighted$mean_effect.x,weighted_vs_unweighted$mean_effect.y)
+abline(0,1)
+```
+Weighted mean is always larger than the unweighted mean
+
+number of segregating sites
+```{r}
+moe_muta_weightedMeanSd_generation$n_segregations<-moe_muta_weightedMeanSd_generation$n_segregations / 100
+num<-group_by(moe_muta_weightedMeanSd_generation,Vs,sdMutation,speedCoef)%>%
+  summarise(n_segregations=sum(n_segregations)/n())
+num_vs<-left_join(num,moe_muta_mean,by=c('Vs','sdMutation','speedCoef'))
+
+plot(num_vs$n_segregations.x,num_vs$n_segregations.y)
+abline(0,1)
+```
+Those speeds with replicates less than 100 are not accurate in the weighted data frame.
+
+### mean effect of fixations vs. segregating sites
+```{r}
+fix_vs_segre<-left_join(moe_fixed2,moe_muta_weightedMeanSd,by=c('Vs','sdMutation','speedCoef'))
+
+plot(fix_vs_segre$mean_effect.x,fix_vs_segre$mean_effect.y,xlab="mean effect of fixations",ylab="mean effect of segregating")
+abline(0,1)
+
+plot(fix_vs_segre$sd_effect.x,fix_vs_segre$sd_effect.y,xlab="std. of effect of fixations",ylab="std. of effect of segregating")
+abline(0,1)
+
+sd_diff<-mutate(fix_vs_segre,sd_effect_diff=sd_effect.x - sd_effect.y)
+sd_diff[order(sd_diff$sd_effect_diff,decreasing = T),]
+ggplot(sd_diff,aes(x=speed/sdMutation,y=sd_effect_diff/sdMutation,group=group,col=sigmaOmega2))+
+  scale_color_manual(name=TeX("$Trait\\ (\\frac{omega^{2}}{2V_s})"),values=legend_pattern$color,labels=legend_pattern$sigmaOmega2)+
+  geom_point()+
+  geom_line()+
+  geom_hline(yintercept=0)+
+  labs(x=TeX("$Speed\\ (\\sigma)"),y=TeX("$Sd(fixations) - sd(segregating)\\ (\\sigma)"))
+```
+Effect size of them are highly related, but the effect size of fixations are larger.
+Std. of effect size are also highly related. In general, segregating sites have higher std., but, in the second largest part, fixations have larger std.
+
+
+
+### Allelic frequency ~ effect size matrix
+```{r eval=F}
+N=10000
+
+singleTrait_db<-dbConnect(RSQLite::SQLite(),dbname="/projects/ag-stetter/yzhang44/simulation/singleTrait.sqlite")
+on.exit(dbDisconnect(singleTrait_db))
+
+dbListTables(singleTrait_db)
+
+N=10000
+
+parameters<-tbl(singleTrait_db,"parameters")%>%as.data.frame
+
+segre_stable<-tbl(singleTrait_db,"burnin_muta")%>%
+  filter(Vs==1 & sdMutation==0.5 & generation==10*N)%>%
+  as.data.frame
+
+segre_case<-tbl(singleTrait_db,"gradual_muta")%>%
+  filter(Vs==1 & sdMutation==0.5 & speedCoef %in% c(0.002,0.5,1.0,6.5,10.0,13.5,18.0,21.0) & generation==20*N)%>%
+  as.data.frame
+# 0.5 is where the max segregating number & the mean effect close to sdMutation=0.5
+# 1.0 is where the speed is 1 sqrt(SSE_VG)
+# 10.0 is where the speed is 1 sdMutation=0.5 & max weighted mean_effect
+# 6.5 is where the max sd_effect, max genetic variance
+# 18.0 is where the sd_effect is at the bottom of fast speeds
+# 0.002 & 21.0 are the slowest and fastest speed (less than 100 replicates at speedCoef=21.5)
+
+segre_case<-rbind(mutate(segre_stable,speedCoef=0),segre_case)
+# quantile(segre_case$effectSize)
+#         0%        25%        50%        75%       100% 
+# -1.7177300 -0.0108042  0.2692030  0.5657222  2.0909700 
+# quantile(segre_case$frequency)
+#      0%     25%     50%     75%    100% 
+# 0.00005 0.00005 0.00050 0.02525 0.99995 
+
+segre_case<-mutate(segre_case,Vs=1,sdMutation=0.5)
+save(segre_case,file="segre_case.RData")
+```
+
+add stabilizing state as a contrast
+```{r}
+load("data/processed/segre_case.RData")
+segre_case<-mutate(segre_case,effectSize_sdMutation=effectSize/sdMutation)
+segre_case$freq_left<-cut(segre_case$frequency,breaks=c(0,5e-05,1e-04,1e-03,1e-02,seq(0.1,1,0.1)),labels=F)
+segre_case$eff_left<-cut(segre_case$effectSize_sdMutation,breaks=seq(-4,4.2,0.2),labels=F)
+
+summ_segre_case<-group_by(segre_case,speedCoef)%>%
+  summarise(mean_effect=sum(frequency * effectSize)/sum(frequency),
+            sd_effect=sqrt(sum(frequency * (effectSize - mean_effect)^2) / sum(frequency)))
+
+num_df<-group_by(segre_case,speedCoef)%>%
+  summarise(total_num=n(),n_replicate=length(unique(replicate)))
+num_df<-mutate(num_df,n_segre=round(total_num/n_replicate,2))
+segre_case_matrix<-group_by(segre_case,speedCoef,eff_left,freq_left)%>%summarise(num=n())%>%
+  left_join(.,num_df,by=c('speedCoef'))%>%
+  mutate(relFreq=num/total_num)
+
+subdf<-subset(segre_case_matrix,speedCoef %in% c(0,0.5,10))
+subdf$speedCoef<-factor(subdf$speedCoef,levels=c(0,0.5,10),labels=c("Before shift","Slow shift","Fast shift"))
+sub_num_df<-subset(num_df,speedCoef %in% c(0,0.5,10))
+sub_num_df$speedCoef<-factor(sub_num_df$speedCoef,levels=c(0,0.5,10),labels=c("Before shift","Slow shift","Fast shift"))
+matrix_p<-ggplot()+
+  geom_rect(data=subdf,aes(xmin=eff_left,xmax=eff_left+1,ymin=freq_left,ymax=freq_left+1,fill=relFreq))+
+  scale_fill_viridis_c(trans='log10',name="Proportion",breaks=c(1e-4,1e-3,1e-2),labels=TeX(c("$10^{-4}","$10^{-3}","$10^{-2}")))+
+  facet_grid(speedCoef~.)+
+  geom_vline(xintercept = 21,col='red')+
+  scale_x_continuous(breaks=c(1,11,21,31,41),labels=c(-4,-2,0,2,4))+
+  scale_y_continuous(breaks=c(1,2,3,4,5,6,10,14),labels=TeX(c("0","$5\\times 10^{-5}","$10^{-4}","$10^{-3}","$10^{-2}","0.1","0.5","0.9")))+
+  geom_text(data=sub_num_df,aes(x=9,y=12,label=paste0("n=",n_segre)))+
+  labs(x=TeX("$Effect\\ size\\ (\\omega)"),y="Allele frequency")+
+  theme(panel.grid.major = element_line(),legend.position="bottom",aspect.ratio = 0.5)
+
+pdf("output/matrix_polygenic.pdf",width=5,height=6)
+matrix_p
+dev.off()
+
+## remove new mutations
+segre_case_nonNew<-subset(segre_case,aroseTick!=20*N)
+segre_case_nonNew<-subset(segre_case_nonNew, !(speedCoef==0 & aroseTick==10*N))
+
+num_df_nonNew<-group_by(segre_case_nonNew,speedCoef)%>%summarise(total_num=n())
+segre_case_matrix_nonNew<-group_by(segre_case_nonNew,speedCoef,eff_left,freq_left)%>%summarise(num=n())%>%
+  left_join(.,num_df_nonNew,by=c('speedCoef'))%>%
+  mutate(relFreq=num/total_num)
+
+ggplot(subset(segre_case_matrix_nonNew,speedCoef %in% c(0,0.5,10)))+
+  geom_rect(aes(xmin=eff_left,xmax=eff_left+1,ymin=freq_left,ymax=freq_left+1,fill=relFreq))+
+  scale_fill_viridis_c(trans="log10")+
+  facet_grid(speedCoef~.)+
+  geom_vline(xintercept = 21,col='red')+
+  scale_x_continuous(breaks=c(1,11,21,31,41),labels=c(-4,-2,0,2,4))+
+  scale_y_continuous(breaks=c(1,2,3,4,5,6,10,14),labels=TeX(c("0","$5\\times 10^{-5}","$10^{-4}","$10^{-3}","$10^{-2}","0.1","0.5","0.9")))+
+  labs(x=TeX("$Effect\\ size\\ (\\omega)"),y="Allele frequency")+
+  theme(panel.grid.major = element_line(),legend.position="bottom",aspect.ratio = 0.5)
+```
+
+
+
+### Allelic frequency ~ effect size matrix of all traits
+```{r eval=F}
+# data are from summary_statistics.Rmd
+maxVG<-split(df,df$group)%>%lapply(.,FUN=function(x){return(x[which.max(x$MOE_VG),])})%>%do.call('rbind',.)%>%as.data.frame; rownames(maxVG)<-NULL
+
+maxSN<-split(moe_muta2,moe_muta2$group)%>%lapply(.,FUN=function(x){return(x[which.max(x$n_segregations),])})%>%do.call('rbind',.)%>%as.data.frame; rownames(maxSN)<-NULL
+
+maxSE<-split(moe_muta2,moe_muta2$group)%>%lapply(.,FUN=function(x){return(x[which.max(x$mean_effect),])})%>%do.call('rbind',.)%>%as.data.frame; rownames(maxSE)<-NULL
+
+maxFE<-split(moe_fixed2,moe_fixed2$group)%>%lapply(.,FUN=function(x){return(x[which.max(x$mean_effect),])})%>%do.call('rbind',.)%>%as.data.frame; rownames(maxFE)<-NULL
+
+# maxSEW<-split(moe_muta_weightedMeanSd,moe_muta_weightedMeanSd$group)%>%lapply(.,FUN=function(x){return(x[which.max(x$mean_effect),])})%>%do.call('rbind',.)%>%as.data.frame; rownames(maxSEW)<-NULL 
+# from the old simulations: only Vs1sd0.5 & Vs10sd0.1 are close, others are the same)
+
+maxSPEED<-group_by(paras,Vs,sdMutation)%>%slice_max(order_by = speedCoef,n=2)
+minSPEED<-group_by(paras,Vs,sdMutation)%>%slice_min(order_by = speedCoef)
+
+paras_vg<-left_join(paras,parameters,by=c("Vs","sdMutation"))
+paras_vg<-mutate(paras_vg,speed_omega_1=abs(speedCoef*sqrt(SSE_VG)/sdMutation-1))
+OneOmegaSPEED<-group_by(paras_vg,Vs,sdMutation)%>%slice_min(order_by = speed_omega_1)
+OneOmegaSPEED<-OneOmegaSPEED[,c("Vs","sdMutation","speedCoef")]
+OneSigmaVGSPPED<-paras[paras$speedCoef==0.5,]
+
+matrix_speeds<-rbind(maxVG[,1:3],maxSN[,1:3],maxSE[,1:3],maxFE[,1:3],maxSPEED[,1:3],minSPEED[,1:3],OneOmegaSPEED,OneSigmaVGSPPED)
+matrix_speeds<-matrix_speeds[order(matrix_speeds$Vs,matrix_speeds$sdMutation,matrix_speeds$speedCoef),]
+
+matrix_speeds<-unique(matrix_speeds)# 59 * 3
+save(matrix_speeds,file="matrix_speeds.RData")
+```
+
+```{r eval=F}
+singleTrait_db<-dbConnect(RSQLite::SQLite(),dbname="~/shortcut/B6/simulation/singleTrait.sqlite")
+on.exit(dbDisconnect(singleTrait_db))
+
+dbListTables(singleTrait_db)
+
+N=10000
+
+parameters<-tbl(singleTrait_db,"parameters")%>%as.data.frame
+
+segre_stable<-tbl(singleTrait_db,"burnin_muta")%>%
+  filter(generation==10*N)%>%
+  as.data.frame
+
+segre_speeds<-c()
+for(Vs0 in c(1,10,100)){
+  for(sdMutation0 in c(0.05,0.1,0.5)){
+    speedCoefs<-subset(matrix_speeds,Vs==Vs0 & sdMutation==sdMutation0)$speedCoef
+    
+    segre_case<-tbl(singleTrait_db,"gradual_muta")%>%
+      filter(Vs==Vs0 & sdMutation==sdMutation0 & speedCoef %in% speedCoefs & generation==20*N)%>%
+      as.data.frame
+    
+    segre_speeds<-rbind(segre_speeds,segre_case)
+  }
+}
+
+segre<-rbind(mutate(segre_stable,speedCoef=0),segre_speeds)
+save(parameters,segre,file="segre.RData")
+```
+
+```{r}
+load("data/processed/segre.RData")
+
+segre<-left_join(segre,parameters,by=c("Vs","sdMutation"))
+segre<-mutate(segre,effectSize_sdMutation=effectSize/sdMutation,
+              speed_omega=round(speedCoef*sqrt(SSE_VG)/sdMutation,4))
+segre$freq_left<-cut(segre$frequency,breaks=c(0,1e-04,1e-03,1e-02,seq(0.1,1,0.1)),label=F)
+segre$eff_left<-cut(segre$effectSize_sdMutation,breaks=seq(-4.4,4.4,0.2),labels=F)
+
+num_df<-group_by(segre,Vs,sdMutation,speedCoef,speed_omega)%>%
+  summarise(total_num=n(),n_replicate=length(unique(replicate)))
+num_df<-mutate(num_df,n_segre=round(total_num/n_replicate,2))
+segre_matrix<-group_by(segre,Vs,sdMutation,speedCoef,speed_omega,freq_left,eff_left)%>%summarise(num=n())%>%
+  left_join(.,num_df,by=c('Vs','sdMutation','speedCoef','speed_omega'))%>%
+  mutate(relFreq=num/total_num)
+
+
+label_speed<-function(string){TeX(paste(string,"$\\omega$"))}
+
+for(Vs0 in c(1,10,100)){
+  for(sdMutation0 in c(0.05,0.1,0.5)){
+    subdf<-subset(segre_matrix,Vs==Vs0 & sdMutation==sdMutation0)
+    sub_num_df<-subset(num_df,Vs==Vs0 & sdMutation==sdMutation0)
+    
+    p_title=paste0("Trait: Vs=",Vs0," & $\\omega=",sdMutation0)
+    
+    matrix_p<-ggplot()+
+      geom_rect(data=subdf,aes(xmin=eff_left,xmax=eff_left+1,ymin=freq_left,ymax=freq_left+1,fill=relFreq))+
+      scale_fill_viridis_c(trans='log10',name="Proportion",breaks=c(1e-4,1e-3,1e-2),
+                           labels=TeX(c("$10^{-4}","$10^{-3}","$10^{-2}")))+
+      facet_grid(speed_omega~.,labeller=labeller(speed_omega=as_labeller(label_speed,label_parsed)))+
+      geom_vline(xintercept = 23,col='red')+
+      scale_x_continuous(breaks=c(3,13,23,33,43),labels=c(-4,-2,0,2,4))+
+      scale_y_continuous(breaks=c(1,2,3,4,5,9,13),
+                         labels=TeX(c("0","$10^{-4}","$10^{-3}","$10^{-2}","0.1","0.5","0.9")))+
+      geom_text(data=sub_num_df,aes(x=10,y=12,label=paste0("n=",n_segre)))+
+      labs(title=TeX(p_title),x=TeX("$Effect size (\\omega)"),y="Allele frequency")+
+      theme(panel.grid.major = element_line(),legend.position="bottom",aspect.ratio = 0.6,
+            axis.text = element_text(size=9))
+    
+    assign(paste0("Vs",Vs0,"sd",sdMutation0),matrix_p)
+  }
+}
+
+pdf("output/genetic_architecture_traits.pdf",width=8.2,height=11)
+ggarrange(Vs1sd0.05,Vs1sd0.1,Vs1sd0.5,common.legend = T,nrow=1)
+ggarrange(Vs10sd0.05,Vs10sd0.1,Vs10sd0.5,common.legend = T,nrow=1)
+ggarrange(Vs100sd0.05,Vs100sd0.1,Vs100sd0.5,common.legend = T,nrow=1)
+dev.off()
+```
+
+
+
+
+disconnect to the database
+```{r}
+dbDisconnect(singleTrait_db)
+```
+

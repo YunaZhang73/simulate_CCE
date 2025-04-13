@@ -1,0 +1,84 @@
+// set up a simulation with various QTLs
+initialize() {
+	workfolder = system("echo $workfolder");
+	setwd(workfolder);
+	
+	setSeed(seed);
+	
+	initializeSLiMOptions(keepPedigrees = T);
+	initializeMutationRate(mutation_rate);
+	
+	// m1 are s(non-neutral) mutations draw from a normal distribution N(mu_mutation,sd_mutation)
+	initializeMutationType("m1", h, "n", mu_mutation, sd_mutation);
+
+	// simulate non-neutral mutations
+	initializeGenomicElementType("g1", m1, 1);
+	
+	// the length 1 mb genome is for non-neutral mutations
+	initializeGenomicElement(g1, 0, geno_len);
+	
+	// uniform recombination rate
+	initializeRecombinationRate(recombination_rate);
+}
+
+// tell sLiM that pay no attention to the selection coefficients for m1; m1 mutations are always neutral
+mutationEffect(m1){return 1.0;}
+
+// create a population of 1000 individuals
+1 early() {
+	sim.addSubpop("p1", N);
+}
+
+1 late(){
+	sim.readFromPopulationFile(paste0("burn_in/raw/population10N_",replicate,".txt"));
+}
+
+// gradual shift
+100001:200000 late() {
+   inds = sim.subpopulations.individuals;
+   
+   fixed_effect = sum(sim.substitutions.selectionCoeff) + SSE_fixed;
+   phenotypes = inds.sumOfMutationsOfType(m1) + 2*fixed_effect;
+	
+   // calculate individual fitness
+   speed = speedCoef * sqrt(VG);
+   new_optimum = speed*(sim.cycle - 100000);
+   inds.fitnessScaling = exp(- (phenotypes - new_optimum)^2 / 2/Vs);
+   if (all(inds.fitnessScaling == 0)) { stop("Global extinction in cycle" + sim.cycle); }
+   
+   // record the mean and variance of phenotypes at each generation 
+   writeFile(paste0("gradual/stats_",speedCoef,"_",replicate,".txt"),replicate+" "+sim.cycle+" "+mean(phenotypes)+" " +var(phenotypes)+" "+mean(inds.fitnessScaling)+" "+var(inds.fitnessScaling), append=T);
+   
+   // record every [interval] generations
+   if(sim.cycle <= 101000){interval = 10;} else if(sim.cycle<199000){interval = 500;} else{interval=10;}
+   
+	if(sim.cycle % interval == 0){
+	//	record the position, frequency and effect size and arose cycle of remain mutations
+	muts = sim.mutationsOfType(m1);
+	id = muts.id;
+	freqs = sim.mutationFrequencies(NULL, muts);
+	pos = muts.position;
+	effects = muts.selectionCoeff;
+	arose = muts.originTick;
+	writeFile(paste0("gradual/muta_",speedCoef,"_",replicate,".txt"),replicate+ " " +sim.cycle + " " +id+" "+pos + " " + freqs + " " + effects + " " + arose, append=T);
+	
+	// record individual phenotype
+	writeFile(paste0("gradual/pheno_",speedCoef,"_",replicate,".txt"), replicate+ " " +sim.cycle + " " + phenotypes + " " + inds.fitnessScaling+" "+p1.lifetimeReproductiveOutput, append=T);
+	}
+}
+
+// record output file for afterward simulations
+200000 late() {
+//	record the fixed mutations
+	fixed_muts = sim.substitutions;
+	fixed_id = fixed_muts.id;
+	fixed_pos = fixed_muts.position;
+	fixed_arose = fixed_muts.originTick;
+	fixed_end = fixed_muts.fixationTick;
+	fixed_effects = fixed_muts.selectionCoeff;
+	
+	writeFile(paste0("gradual/fixedMuta_",speedCoef,"_",replicate,".txt"),replicate+ " " +fixed_id+" "+fixed_pos + " " + fixed_effects + " " + fixed_arose + " " + fixed_end, append=T);
+	
+	// save for following simulation
+	sim.outputFull(paste0("gradual/raw/population20N_",speedCoef,"_",replicate,".txt"));
+}

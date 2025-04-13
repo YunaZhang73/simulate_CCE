@@ -1,0 +1,113 @@
+---
+title: "run_simulation"
+author: "Yuna"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+date: '2024-04-24'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = T,message =  F,warning=F,results = "hide")
+```
+
+### Working path
+
+```{r}
+setwd("~/shortcut/B6/simulation/")
+```
+
+### Assign different seeds for simulations
+```{r}
+for(Vs in c(1,10,100)){
+for(sdMutation in c(0.05,0.1,0.5)){
+
+newFile=paste0("Vs",Vs,"sd",sdMutation)
+
+dir.create(newFile)
+dir.create(paste0(newFile,"/burn_in"))
+dir.create(paste0(newFile,"/burn_in/raw"))
+
+dir.create(paste0(newFile,"/gradual"))
+dir.create(paste0(newFile,"/gradual/raw"))
+
+set.seed(as.integer(100*(Vs+sdMutation)))
+seeds<-sample(0:(as.integer(2^30) - 1),1100,replace = F)
+write.table(seeds[1:100],file=paste0(newFile,"/seeds_burnin.txt"),row.names = F,quote = F,col.names = F)
+# write.table(seeds[101:1100],file=paste0(newFile,"/seeds_gradual.txt"),row.names = F,quote = F,col.names = F)
+}
+}
+```
+
+Make "burnin.sh" for every parameter combination
+```{bash}
+for Vs in 1 10 100
+do
+
+for sd in 0.05 0.1 0.5
+do
+
+newFile="Vs"$Vs"sd"$sd"/"
+cp burnin.sh $newFile
+
+sed -i "s/Vs=1/Vs=$Vs/g" "Vs"$Vs"sd"$sd"/burnin.sh"
+sed -i "s/sd_mutation=0.05/sd_mutation=$sd/g" "Vs"$Vs"sd"$sd"/burnin.sh"
+
+done
+done
+```
+
+Submit simulation tasks for the first 10N generations to the batch system
+```{bash}
+sbatch /scratch/yzhang44/B6/simulation/Vs1sd0.05/burnin.sh
+sbatch /scratch/yzhang44/B6/simulation/Vs1sd0.1/burnin.sh
+sbatch /scratch/yzhang44/B6/simulation/Vs1sd0.5/burnin.sh
+sbatch /scratch/yzhang44/B6/simulation/Vs10sd0.05/burnin.sh
+sbatch /scratch/yzhang44/B6/simulation/Vs10sd0.1/burnin.sh
+sbatch /scratch/yzhang44/B6/simulation/Vs10sd0.5/burnin.sh
+sbatch /scratch/yzhang44/B6/simulation/Vs100sd0.05/burnin.sh
+sbatch /scratch/yzhang44/B6/simulation/Vs100sd0.1/burnin.sh
+sbatch /scratch/yzhang44/B6/simulation/Vs100sd0.5/burnin.sh
+```
+
+Make gradual_shift.sh for every parameter combination
+```{bash}
+Vs_ls=($(cat Vs_ls.txt))
+sd_ls=($(cat sd_ls.txt))
+VG_ls=($(cat VG_ls.txt))
+speedCoef_num_ls=($(cat speedCoef_num.txt))
+
+for i in {0..8}
+do
+
+Vs=${Vs_ls[$i]}
+sd=${sd_ls[$i]}
+VG=${VG_ls[$i]}
+speedCoef=$(sed -n "$((i+1))p" speedCoef_ls.txt)
+speedCoef_num=${speedCoef_num_ls[$i]}
+
+newFile="Vs"$Vs"sd"$sd"/"
+cp gradual_shift.sh $newFile
+
+sed -i "s/Vs=1/Vs=$Vs/g" $newFile"gradual_shift.sh"
+sed -i "s/sd_mutation=0.05/sd_mutation=$sd/g" $newFile"gradual_shift.sh"
+sed -i "s/VG=0.3/VG=$VG/g" $newFile"gradual_shift.sh"
+sed -i "s/speedCoef_ls=(0.5)/speedCoef_ls=($speedCoef)/g" $newFile"gradual_shift.sh"
+sed -i "s/speedCoef_num/$speedCoef_num/g" $newFile"gradual_shift.sh"
+
+done
+```
+
+Submit simulation tasks for second 10 N generations to the batch system
+```{bash}
+sbatch /scratch/yzhang44/B6/simulation/Vs1sd0.05/gradual_shift.sh
+sbatch /scratch/yzhang44/B6/simulation/Vs1sd0.1/gradual_shift.sh
+sbatch /scratch/yzhang44/B6/simulation/Vs1sd0.5/gradual_shift.sh
+sbatch /scratch/yzhang44/B6/simulation/Vs10sd0.05/gradual_shift.sh
+sbatch /scratch/yzhang44/B6/simulation/Vs10sd0.1/gradual_shift.sh
+sbatch /scratch/yzhang44/B6/simulation/Vs10sd0.5/gradual_shift.sh
+sbatch /scratch/yzhang44/B6/simulation/Vs100sd0.05/gradual_shift.sh
+sbatch /scratch/yzhang44/B6/simulation/Vs100sd0.1/gradual_shift.sh
+sbatch /scratch/yzhang44/B6/simulation/Vs100sd0.5/gradual_shift.sh
+```

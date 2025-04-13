@@ -1,0 +1,74 @@
+// set up a simulation with various QTLs
+initialize() {
+	workfolder = system("echo $workfolder");
+	setwd(workfolder);
+	
+	setSeed(seed);
+	
+	initializeSLiMOptions(keepPedigrees = T);
+	initializeMutationRate(mutation_rate);
+	
+	// m1 are s(non-neutral) mutations draw from a normal distribution N(mu_mutation,sd_mutation)
+	initializeMutationType("m1", h, "n", mu_mutation, sd_mutation);
+
+	// simulate non-neutral mutations
+	initializeGenomicElementType("g1", m1, 1);
+	
+	// the length 1 mb genome is for non-neutral mutations
+	initializeGenomicElement(g1, 0, geno_len);
+	
+	// uniform recombination rate
+	initializeRecombinationRate(recombination_rate);
+}
+
+// tell sLiM that pay no attention to the selection coefficients for m1; m1 mutations are always neutral
+mutationEffect(m1){return 1.0;}
+
+// create a population of 10000 individuals
+1 early() {
+	sim.addSubpop("p1", N);
+}
+
+1:100000 late() {
+   inds = sim.subpopulations.individuals;
+   
+   fixed_effect = sum(sim.substitutions.selectionCoeff);
+   phenotypes = inds.sumOfMutationsOfType(m1) + 2*fixed_effect;
+   
+   inds.fitnessScaling = exp(- (phenotypes - initial_optimum)^2 / 2/Vs);
+	
+	//record the mean and variance of phenotypes at each generation 
+   writeFile(paste0("burn_in/stats_",replicate,".txt"),replicate+" "+sim.cycle+" "+mean(phenotypes)+" " +var(phenotypes)+" "+mean(inds.fitnessScaling)+" "+var(inds.fitnessScaling),append=T);
+   
+	// record the every [interval] generations
+	if(sim.cycle < 99000){interval = 500;} else{interval = 10;}
+	
+	if(sim.cycle % interval == 0){
+	//	record the position, frequency and effect size and arose cycle of segregating mutations
+	muts = sim.mutationsOfType(m1);
+	id=muts.id;
+	freqs = sim.mutationFrequencies(NULL, muts);
+	pos = muts.position;
+	effects = muts.selectionCoeff;
+	arose = muts.originTick;
+	writeFile(paste0("burn_in/muta_",replicate,".txt"),replicate+ " " +sim.cycle + " "+id+" "+ pos + " " + freqs + " " + effects + " " + arose, append=T);
+	
+	// record individual phenotype and the sibling number
+	writeFile(paste0("burn_in/pheno_",replicate,".txt"), replicate+ " " +sim.cycle + " " + phenotypes + " " + inds.fitnessScaling+" "+p1.lifetimeReproductiveOutput, append=T);
+	}
+}
+
+// record output file for afterward simulations
+100000 late() {
+	sim.outputFull(paste0("burn_in/raw/population10N_",replicate,".txt"));
+	
+//	record the fixed mutations
+	fixed_muts = sim.substitutions;
+	fixed_id = fixed_muts.id;
+	fixed_pos = fixed_muts.position;
+	fixed_arose = fixed_muts.originTick;
+	fixed_end = fixed_muts.fixationTick;
+	fixed_effects = fixed_muts.selectionCoeff;
+	
+	writeFile(paste0("burn_in/fixedMuta_",replicate,".txt"),replicate+ " " +fixed_id+" "+fixed_pos + " " + fixed_effects + " " + fixed_arose + " " + fixed_end, append=T);
+}

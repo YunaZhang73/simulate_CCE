@@ -1,0 +1,667 @@
+---
+title: "data_process"
+author: "Yuna"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+date: '2025-01-07'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = T,message =  F,warning=F,results = "hide")
+```
+
+### Working path
+
+```{r}
+setwd("~/shortcut2project/simulation/")
+```
+
+### Library packages
+
+```{r}
+library(DBI)
+library(RSQLite)
+library(dplyr)
+library(ggplot2)
+library(latex2exp)
+```
+
+### Create a database
+
+```{r results='hold'}
+singleTrait_db<-dbConnect(RSQLite::SQLite(),dbname="~/shortcut2project/simulation/singleTrait.sqlite")
+on.exit(dbDisconnect(singleTrait_db))
+
+dbListTables(singleTrait_db)
+```
+
+### Simulation paramters
+```{r}
+N=10000
+```
+
+# Data storage to the database
+
+## save simulation results of the burn-in phase (-10 - 0 N generations)
+```{r}
+paras<-data.frame(Vs=rep(c(1,10,100),each=3),sdMutation=rep(c(0.05,0.1,0.5),3))
+
+for(npara in 1:nrow(paras)){
+  Vs=paras[npara,"Vs"]
+  sdMutation=paras[npara,"sdMutation"]
+  
+  path=paste0("Vs",Vs,"sd",sdMutation,"/burn_in/")
+    
+    for(i in 1:100){
+      stats<-read.table(paste0(path,"stats_",i,".txt"),header=F,col.names=c("replicate","generation","meanPheno","varPheno","meanFitness","varFitness"))
+      stats<-mutate(stats,Vs=Vs,sdMutation=sdMutation)
+      dbWriteTable(singleTrait_db,"burnin_stats",stats,append=T)
+      
+      # information of segregating sites
+       muta<-read.table(paste0(path,"muta_",i,".txt"),
+                     col.names=c("replicate","generation","id","position","frequency","effectSize","aroseTick"))
+       muta<-mutate(muta,Vs=Vs,sdMutation=sdMutation)
+       dbWriteTable(singleTrait_db,name="burnin_muta",muta,append=T)
+    }
+}
+```
+
+### Calculate the mean genetic variance of the last 1000 generations as a base of gradual shift speeds
+```{r}
+burnin_stats<-tbl(singleTrait_db,"burnin_stats")
+
+burnin_stats2_end<-filter(burnin_stats,generation>99000)%>%
+  group_by(Vs,sdMutation,generation)%>%
+  summarise(varPheno_mean=mean(varPheno))
+parameters<-group_by(burnin_stats2_end,Vs,sdMutation)%>%
+  summarise(SSE_VG=mean(varPheno_mean))%>%as.data.frame
+dbWriteTable(singleTrait_db,"parameters",parameters)
+
+# save for writing in gradual_shift.sh
+write.table(parameters$Vs,file="Vs_ls.txt",col.names = F,row.names = F)
+write.table(parameters$sdMutation,file="sd_ls.txt",col.names = F,row.names = F)
+write.table(parameters$SSE_VG,file="VG_ls.txt",col.names = F,row.names = F)
+
+parameters
+```
+
+### Calculate the fixed effect at the end of the stabilizing-selection phase
+These are used to add in the phenotypic values in the next simulation steps, since fixations information were not recorded in the population files.
+```{r}
+for(Vs in c(1,10,100)){
+  for(sdMutation in c(0.05,0.1,0.5)){
+    
+    SSE_fixed100<-c()
+    
+    for(replicate in 1:100){
+      fixedMuta<-read.table(paste0('Vs',Vs,'sd',sdMutation,'/burn_in/fixedMuta_',replicate,'.txt'),
+                            col.names=c('replicate','id','position','effectSize','aroseTick','endTick'))
+      SSE_fixed100<-c(SSE_fixed100,sum(fixedMuta$effectSize))
+    }
+    
+    write.table(SSE_fixed100,file=paste0('Vs',Vs,'sd',sdMutation,'/SSE_fixed.txt'),col.names = F,row.names = F)
+  }
+}
+```
+
+## save simulation results of the moving-optimum phase (0 - 10 N generations)
+```{r}
+# 175 speeds
+paras<-rbind(data.frame(Vs=1,sdMutation=0.05,speedCoef=c(0.002,0.005,0.01,0.02,0.05,0.1,0.2,0.3,0.35,0.38,0.39,0.4,0.5,0.53,0.55,0.8,1.0,1.2,1.4,1.5,1.6)),
+             data.frame(Vs=1,sdMutation=0.1,speedCoef=c(0.002,0.005,0.01,0.02,0.05,0.1,0.2,0.3,0.4,0.5,1.0,1.1,1.2,1.3,1.6,1.65,2.2,2.8,2.9,3.0,3.2,3.4,3.6)),
+             data.frame(Vs=1,sdMutation=0.5,speedCoef=c(0.002,0.005,0.01,0.02,0.05,0.1,0.2,0.3,0.4,0.5,1.0,2.0,3.0,6.5,10.0,11.0,12.0,12.5,13.5,14.0,15.0,16.0,17.0,18.0,18.2,20.0,20.5,21.0)),
+             data.frame(Vs=10,sdMutation=0.05,speedCoef=c(0.002,0.005,0.01,0.02,0.05,0.07,0.08,0.09,0.1,0.11,0.2,0.3,0.4)),
+             data.frame(Vs=10,sdMutation=0.1,speedCoef=c(0.002,0.005,0.01,0.02,0.05,0.1,0.15,0.18,0.2,0.22,0.23,0.24,0.3,0.4,0.5,0.6,0.7,0.8)),
+             data.frame(Vs=10,sdMutation=0.5,speedCoef=c(0.002,0.005,0.01,0.02,0.05,0.1,0.2,0.3,0.4,0.5,1.3,2.3,2.32,2.35,2.4,3.3,3.35,4.3,1.0,4.5,4.6,4.9,5.0,5.2,5.4,6.0)),
+             data.frame(Vs=100,sdMutation=0.05,speedCoef=c(0.002,0.005,0.01,0.02,0.025,0.03,0.031,0.035,0.04,0.05,0.1,0.2)),
+             data.frame(Vs=100,sdMutation=0.1,speedCoef=c(0.002,0.005,0.01,0.02,0.03,0.04,0.045,0.05,0.055,0.057,0.1,0.2,0.3)),
+             data.frame(Vs=100,sdMutation=0.5,speedCoef=c(0.002,0.005,0.01,0.02,0.05,0.1,0.2,0.3,0.35,0.38,0.39,0.4,0.5,0.52,0.55,0.7,0.9,1.1,1.3,1.4,1.5))
+)
+
+for(npara in 1:nrow(paras)){
+  Vs=paras[npara,"Vs"]
+  sdMutation=paras[npara,"sdMutation"]
+  speedCoef=paras[npara,"speedCoef"]
+  
+  path=paste0("Vs",Vs,"sd",sdMutation,"/gradual/")
+  
+  for(i in 1:100){
+    stats<-read.table(paste0(path,"stats_",speedCoef,"_",i,".txt"),header=F,col.names=c("replicate","generation","meanPheno","varPheno","meanFitness","varFitness"))
+    stats<-mutate(stats,Vs=Vs,sdMutation=sdMutation,speedCoef=speedCoef)
+    dbWriteTable(singleTrait_db,name="gradual_stats",stats,append=T)
+    
+    # information of segregating sites
+    muta<-read.table(paste0(path,"muta_",speedCoef,"_",i,".txt"),
+                     col.names=c("replicate","generation","id","position","frequency","effectSize","aroseTick"))
+    muta<-mutate(muta,Vs=Vs,sdMutation=sdMutation,speedCoef=speedCoef)
+    dbWriteTable(singleTrait_db,name="gradual_muta",muta,append=T)
+  }
+}
+```
+
+
+# Data process
+
+## Phenotype
+
+### Phenotypic changes over time
+burn_in: calculate the mean and sd of 100 replicates at each generation
+```{r}
+burnin_stats<-tbl(singleTrait_db,"burnin_stats")
+burnin_stats2<-filter(burnin_stats, generation%%1000==1 | generation>=99000)%>%
+  group_by(Vs,sdMutation,generation)%>%
+  summarise(
+    varPheno_mean=mean(varPheno),
+    varPheno_sd=sd(varPheno)
+  )
+burnin_stats2<-as.data.frame(burnin_stats2)
+```
+
+gradual: calculate the mean and sd of 100 replicates at each generation
+``` {r}
+gradual_stats<-tbl(singleTrait_db,"gradual_stats")
+
+gradual_stats2<-filter(gradual_stats, generation<=101000 | generation%%200==0 | generation >199000)%>%
+  group_by(Vs,sdMutation,speedCoef,generation)%>%
+  summarise(meanPheno_mean=mean(meanPheno),
+            meanPheno_sd=sd(meanPheno),
+            varPheno_mean=mean(varPheno),
+            varPheno_sd=sd(varPheno),
+            meanFitness_mean=mean(meanFitness),
+            meanFitness_sd=sd(meanFitness),
+            varFitness_mean=mean(varFitness),
+            varFitness_sd=sd(varFitness)
+  )
+parameters<-tbl(singleTrait_db,"parameters")
+gradual_stats2<-left_join(gradual_stats2,parameters,by=c("Vs","sdMutation"))
+
+gradual_stats2<-as.data.frame(gradual_stats2)
+gradual_stats2<-mutate(gradual_stats2,optimum=speedCoef*sqrt(SSE_VG)*(generation-10*N),
+                       gap=optimum-meanPheno_mean,
+                       speed=speedCoef * sqrt(SSE_VG),
+                       sigmaOmega2=sdMutation^2/Vs)
+
+so=unique(gradual_stats2$sigmaOmega2)%>%sort
+so=as.character(format(so[-5],scientific = T))
+gradual_stats2$sigmaOmega2<-factor(format(gradual_stats2$sigmaOmega2,scientific=T),level=so,label=so)
+```
+
+extincted: calculate the mean and sd of 100 replicates at each generation
+```{r}
+paras<-data.frame(Vs=c(1,1,1,10,10,10,100,100,100),
+                  sdMutation=c(0.05,0.1,0.5,0.05,0.1,0.5,0.05,0.1,0.5),
+                  speedCoef=c(1.7,4,22,0.6,1,7,0.4,0.5,1.7))
+extincted_stats<-c()
+for(npara in 1:nrow(paras)){
+  Vs=paras[npara,"Vs"]
+  sdMutation=paras[npara,"sdMutation"]
+  speedCoef=paras[npara,"speedCoef"]
+  
+  path=paste0("Vs",Vs,"sd",sdMutation,"/gradual/")
+  
+  for(i in 1:100){
+    stats<-read.table(paste0(path,"stats_",speedCoef,"_",i,".txt"),header=F,col.names=c("replicate","generation","meanPheno","varPheno","meanFitness","varFitness"))
+    stats<-mutate(stats,Vs=Vs,sdMutation=sdMutation,speedCoef=speedCoef)
+    extincted_stats<-rbind(extincted_stats,stats)
+  }
+}
+
+extincted_stats2<-filter(extincted_stats, generation<=101000 | generation%%100==0)%>%
+  group_by(Vs,sdMutation,speedCoef,generation)%>%
+  summarise(n_replicates=n(),meanPheno_mean=mean(meanPheno),
+            meanPheno_sd=sd(meanPheno),
+            varPheno_mean=mean(varPheno),
+            varPheno_sd=sd(varPheno),
+            meanFitness_mean=mean(meanFitness),
+            meanFitness_sd=sd(meanFitness),
+            varFitness_mean=mean(varFitness),
+            varFitness_sd=sd(varFitness)
+  )
+
+singleTrait_db<-dbConnect(RSQLite::SQLite(),dbname="~/shortcut/B6/simulation/singleTrait.sqlite")
+parameters<-tbl(singleTrait_db,"parameters")%>%as.data.frame
+extincted_stats2<-left_join(extincted_stats2,parameters,by=c("Vs","sdMutation"))
+
+N=1e4
+extincted_stats2<-mutate(extincted_stats2,optimum=speedCoef*sqrt(SSE_VG)*(generation-10*N),
+                       gap=optimum-meanPheno_mean,
+                       speed=speedCoef * sqrt(SSE_VG),
+                       sigmaOmega2=sdMutation^2/Vs)
+
+so=unique(extincted_stats2$sigmaOmega2)%>%sort
+so=as.character(format(so,scientific = T))
+extincted_stats2$sigmaOmega2<-factor(format(extincted_stats2$sigmaOmega2,scientific=T),level=so,label=so)
+
+load("stats2.RData")
+save(burnin_stats2,gradual_stats2,extincted_stats2,file='stats2.RData')
+```
+
+
+### Mean phenotype in the stationary state
+calculate the mean of 100 replicates at each of the last 1000 generations in two phases, respectively
+```{r}
+# stabilizing-selection equilibrium
+burnin_stats<-tbl(singleTrait_db,"burnin_stats")
+parameters<-tbl(singleTrait_db,"parameters")
+SSE_df2<-filter(burnin_stats,generation>99000)%>%
+  group_by(Vs,sdMutation,generation)%>%
+  summarise(meanPheno_mean=mean(meanPheno),
+            varPheno_mean=mean(varPheno),
+            meanFitness_mean=mean(meanFitness))
+SSE_df2<-left_join(SSE_df2,parameters,by=c("Vs","sdMutation"))
+SSE_df2<-as.data.frame(SSE_df2)
+SSE_df2<-mutate(SSE_df2,optimum=0,
+                gap=optimum-meanPheno_mean)
+
+# moving-optimum equilibrium
+gradual_stats<-tbl(singleTrait_db,"gradual_stats")
+MOE_df2<-filter(gradual_stats,generation>199000)%>%
+  group_by(Vs,sdMutation,speedCoef,generation)%>%
+  summarise(meanPheno_mean=mean(meanPheno),
+            varPheno_mean=mean(varPheno),
+            meanFitness_mean=mean(meanFitness))
+MOE_df2<-left_join(MOE_df2,parameters,by=c("Vs","sdMutation"))
+MOE_df2<-as.data.frame(MOE_df2)
+MOE_df2<-mutate(MOE_df2,optimum=speedCoef*sqrt(SSE_VG)*(generation-10*N),
+            gap=optimum-meanPheno_mean)
+
+parameters<-as.data.frame(parameters)
+
+save(SSE_df2,MOE_df2,parameters,file="df2.RData")
+```
+
+
+
+## Fixations
+
+### Fixations changes over time
+pick few speeds for following analyses
+```{r}
+paras_quantile<-rbind(data.frame(Vs=1,sdMutation=0.05,speedCoef=c(0.002,0.2,0.5,0.8,1.2,1.6)),
+                      data.frame(Vs=1,sdMutation=0.1,speedCoef=c(0.002,0.5,1.3,2.2,2.9,3.6)),
+                      data.frame(Vs=1,sdMutation=0.5,speedCoef=c(0.002,3,6.5,12,16,21)),
+                      data.frame(Vs=10,sdMutation=0.05,speedCoef=c(0.002,0.08,0.11,0.2,0.3,0.4)),
+                      data.frame(Vs=10,sdMutation=0.1,speedCoef=c(0.002,0.15,0.3,0.5,0.6,0.8)),
+                      data.frame(Vs=10,sdMutation=0.5,speedCoef=c(0.002,1,2.4,3.35,4.9,6)),
+                      data.frame(Vs=100,sdMutation=0.05,speedCoef=c(0.002,0.02,0.035,0.05,0.1,0.2)),
+                      data.frame(Vs=100,sdMutation=0.1,speedCoef=c(0.002,0.02,0.05,0.1,0.2,0.3)),
+                      data.frame(Vs=100,sdMutation=0.5,speedCoef=c(0.002,0.3,0.55,0.9,1.3,1.5))
+                      )
+```
+
+Scan the whole evolutionary time with a 100-generation window, take average of 100 replicates
+```{r}
+gran=100
+
+mo_fixedMuta2<-c()
+for(npara in 1:nrow(paras_quantile)){
+  Vs=paras_quantile[npara,"Vs"]
+  sdMutation=paras_quantile[npara,"sdMutation"]
+  speedCoef=paras_quantile[npara,"speedCoef"]
+  
+  for(replicate in 1:100){
+    err<-try(df<-read.table(paste0("Vs",Vs,"sd",sdMutation,"/gradual/fixedMuta_",speedCoef,"_",replicate,".txt"),
+                        colClasses=c("integer","NULL","NULL","numeric","integer","integer"),
+                        col.names=c("replicate","id","position","effectSize","aroseTick","endTick")),silent=T)
+    
+    if("try-error" %in% class(err)){next}
+    
+    df<-mutate(df,fixedTime=ifelse(aroseTick>10*N,endTick-aroseTick,endTick-10*N))
+    df$endTick_cut<-cut(df$endTick,breaks=seq(10*N,20*N,gran))
+    df$endTick_cut<-as.numeric(df$endTick_cut)*gran
+  
+    df2<-group_by(df,endTick_cut)%>%
+    summarise(n_fixed=n(),n_posFixed=sum(effectSize>0),
+            mean_fixedtime=mean(fixedTime),mean_posFixedtime=mean(fixedTime[effectSize>0]),
+            mean_negFixedtime=mean(fixedTime[effectSize<0]),
+            mean_effect=mean(effectSize),mean_posEffect=mean(effectSize[effectSize>0]),
+            mean_negEffect=mean(effectSize[effectSize<0]))
+    
+    df2<-mutate(df2,Vs=Vs,sdMutation=sdMutation,speedCoef=speedCoef,replicate=replicate)
+    mo_fixedMuta2<-rbind(mo_fixedMuta2,df2)
+  }
+}
+
+mo_fixedMuta3_n<-group_by(mo_fixedMuta2,Vs,sdMutation,speedCoef,endTick_cut)%>%summarise(n_fixed=sum(n_fixed)/gran/100,n_posFixed=sum(n_posFixed)/gran/100)
+mo_fixedMuta3<-group_by(mo_fixedMuta2,Vs,sdMutation,speedCoef,endTick_cut)%>%summarise_at(vars(-replicate),mean,na.rm=T)
+mo_fixedMuta3$n_fixed<-mo_fixedMuta3_n$n_fixed
+mo_fixedMuta3$n_posFixed<-mo_fixedMuta3_n$n_posFixed
+mo_fixedMuta3<-left_join(mo_fixedMuta3,as.data.frame(parameters),by=c('Vs','sdMutation'))
+mo_fixedMuta3<-mutate(mo_fixedMuta3,speed=speedCoef*sqrt(SSE_VG))
+
+save(mo_fixedMuta2,mo_fixedMuta3,file="mo_fixedMuta.RData")
+```
+
+
+### Fixations in the stationary state
+Summarize the total number, mean and standard deviation of effect size and fixation time of fixations in the last 1000 generations. In addition, split the fixations by the direction of effect size and summarize.
+
+burnin:
+```{r}
+sse_fixed<-data.frame(Vs=NA,sdMutation=NA,replicate=NA,
+                      n_fixed=NA,n_posFixed=NA,
+                      
+                      mean_effect=NA,sd_effect=NA,
+                      mean_posEffect=NA,sd_posEffect=NA,
+                      mean_negEffect=NA,sd_negEffect=NA,
+                      
+                      mean_fixedtime=NA,sd_fixedtime=NA,
+                      mean_posFixedtime=NA,sd_posFixedtime=NA,
+                      mean_negFixedtime=NA,sd_negFixedtime=NA
+)
+
+i=1
+for(Vs in c(1,10,100)){
+  for(sdMutation in c(0.05,0.1,0.5)){
+    for(replicate in 1:100){
+      fixedMuta<-read.table(paste0("Vs",Vs,"sd",sdMutation,"/burn_in/fixedMuta_",replicate,".txt"),
+                            colClasses=c("integer","NULL","NULL","numeric","integer","integer"),
+                            col.names=c("replicate","id","position","effectSize","aroseTick","endTick"))
+      
+      # stabilizing selection equilibrium: last 0.1N generation:
+      fixedMuta<-subset(fixedMuta,endTick > 9.9*N)
+      
+      sse_fixed[i,"Vs"]<-Vs
+      sse_fixed[i,"sdMutation"]<-sdMutation
+      sse_fixed[i,"replicate"]<-replicate
+      
+      if(nrow(fixedMuta)==0){
+        sse_fixed[i,"n_fixed"]<-0
+        sse_fixed[i,"n_posFixed"]<-0
+        
+        sse_fixed[i,-c(1:5)]<-NaN
+        
+      }else{
+        sse_fixed[i,"n_fixed"]<-nrow(fixedMuta)
+        sse_fixed[i,"n_posFixed"]<-sum(fixedMuta$effectSize>0)
+        
+        sse_fixed[i,"mean_effect"]<-mean(fixedMuta$effectSize)
+        sse_fixed[i,"sd_effect"]<-sd(fixedMuta$effectSize)
+        sse_fixed[i,"mean_posEffect"]<-mean(fixedMuta$effectSize[fixedMuta$effectSize > 0])
+        sse_fixed[i,"sd_posEffect"]<-sd(fixedMuta$effectSize[fixedMuta$effectSize > 0])
+        sse_fixed[i,"mean_negEffect"]<-mean(fixedMuta$effectSize[fixedMuta$effectSize < 0])
+        sse_fixed[i,"sd_negEffect"]<-sd(fixedMuta$effectSize[fixedMuta$effectSize < 0])
+        
+        fixedTime=fixedMuta$endTick-fixedMuta$aroseTick
+        sse_fixed[i,"mean_fixedtime"]<-mean(fixedTime)
+        sse_fixed[i,"sd_fixedtime"]<-sd(fixedTime)
+        sse_fixed[i,"mean_posFixedtime"]<-mean(fixedTime[fixedMuta$effectSize > 0])
+        sse_fixed[i,"sd_posFixedtime"]<-sd(fixedTime[fixedMuta$effectSize > 0])
+        sse_fixed[i,"mean_negFixedtime"]<-mean(fixedTime[fixedMuta$effectSize < 0])
+        sse_fixed[i,"sd_negFixedtime"]<-sd(fixedTime[fixedMuta$effectSize < 0])
+      }
+      
+      i<-i+1
+    }
+  }
+}
+```
+
+moving optimum:
+```{r}
+moe_fixed<-data.frame(Vs=NA,sdMutation=NA,speedCoef=NA,replicate=NA,
+                     n_fixed=NA,n_burninArisen=NA,n_posFixed=NA,n_posBurnin=NA,
+                     
+                     mean_effect=NA,sd_effect=NA,
+                     mean_burninEffect=NA,sd_burninEffect=NA,
+                     mean_shiftEffect=NA,sd_shiftEffect=NA,
+                     mean_posEffect=NA,sd_posEffect=NA,
+                     mean_negEffect=NA,sd_negEffect=NA,
+                     mean_posBurninEffect=NA,sd_posBurninEffect=NA,
+                     mean_posShiftEffect=NA,sd_posShiftEffect=NA,
+                     mean_negBurninEffect=NA,sd_negBurninEffect=NA,
+                     mean_negShiftEffect=NA,sd_negShiftEffect=NA,
+                     
+                     mean_fixedtime=NA,sd_fixedtime=NA,
+                     mean_burninFixedtime=NA,sd_burninFixedtime=NA,
+                     mean_shiftFixedtime=NA,sd_shiftFixedtime=NA,
+                     mean_posFixedtime=NA,sd_posFixedtime=NA,
+                     mean_negFixedtime=NA,sd_negFixedtime=NA,
+                     mean_posBurninFixedtime=NA,sd_posBurninFixedtime=NA,
+                     mean_posShiftFixedtime=NA,sd_posShiftFixedtime=NA,
+                     mean_negBurninFixedtime=NA,sd_negBurninFixedtime=NA,
+                     mean_negShiftFixedtime=NA,sd_negShiftFixedtime=NA)
+i=1
+for(npara in 1:nrow(paras)){
+  Vs=paras[npara,'Vs']
+  sdMutation=paras[npara,'sdMutation']
+  speedCoef=paras[npara,'speedCoef']
+  
+  for(replicate in 1:100){
+     err<-try(fixedMuta<-read.table(paste0("Vs",Vs,"sd",sdMutation,"/gradual/fixedMuta_",speedCoef,"_",replicate,".txt"),
+                                   colClasses=c("integer","NULL","NULL","numeric","integer","integer"),
+                                   col.names=c("replicate","id","position","effectSize","aroseTick","endTick")), silent = T)
+    
+    if("try-error" %in% class(err)){next}
+    
+    # moving optimum equilibrium: last 0.1N generation
+    fixedMuta<-subset(fixedMuta,endTick > 19.9*N)
+    
+    moe_fixed[i,"Vs"]<-Vs
+    moe_fixed[i,"sdMutation"]<-sdMutation
+    moe_fixed[i,"speedCoef"]<-speedCoef
+    moe_fixed[i,"replicate"]<-replicate
+    
+    if(nrow(fixedMuta)==0){
+      moe_fixed[i,"n_fixed"]<-0
+      moe_fixed[i,"n_burninArisen"]<-0
+      moe_fixed[i,"n_posFixed"]<-0
+      moe_fixed[i,"n_posBurnin"]<-0
+      
+      moe_fixed[i,-c(1:8)]<-NaN
+      
+    }else{
+      moe_fixed[i,"n_fixed"]<-nrow(fixedMuta)
+      moe_fixed[i,"n_burninArisen"]<-sum(fixedMuta$aroseTick<=10*N)
+      moe_fixed[i,"n_posFixed"]<-sum(fixedMuta$effectSize>0)
+      moe_fixed[i,"n_posBurnin"]<-sum(fixedMuta$effectSize>0 & fixedMuta$aroseTick<=10*N)
+      
+      moe_fixed[i,"mean_effect"]<-mean(fixedMuta$effectSize)
+      moe_fixed[i,"sd_effect"]<-sd(fixedMuta$effectSize)
+      moe_fixed[i,"mean_burninEffect"]<-mean(fixedMuta$effectSize[fixedMuta$aroseTick<=10*N])
+      moe_fixed[i,"sd_burninEffect"]<-sd(fixedMuta$effectSize[fixedMuta$aroseTick<=10*N])
+      moe_fixed[i,"mean_shiftEffect"]<-mean(fixedMuta$effectSize[fixedMuta$aroseTick>10*N])
+      moe_fixed[i,"sd_shiftEffect"]<-sd(fixedMuta$effectSize[fixedMuta$aroseTick>10*N])
+      moe_fixed[i,"mean_posEffect"]<-mean(fixedMuta$effectSize[fixedMuta$effectSize > 0])
+      moe_fixed[i,"sd_posEffect"]<-sd(fixedMuta$effectSize[fixedMuta$effectSize > 0])
+      moe_fixed[i,"mean_negEffect"]<-mean(fixedMuta$effectSize[fixedMuta$effectSize < 0])
+      moe_fixed[i,"sd_negEffect"]<-sd(fixedMuta$effectSize[fixedMuta$effectSize < 0])
+      moe_fixed[i,"mean_posBurninEffect"]<-mean(fixedMuta$effectSize[fixedMuta$effectSize > 0 & fixedMuta$aroseTick<=10*N])
+      moe_fixed[i,"sd_posBurninEffect"]<-sd(fixedMuta$effectSize[fixedMuta$effectSize > 0 & fixedMuta$aroseTick<=10*N])
+      moe_fixed[i,"mean_posShiftEffect"]<-mean(fixedMuta$effectSize[fixedMuta$effectSize > 0 & fixedMuta$aroseTick>10*N])
+      moe_fixed[i,"sd_posShiftEffect"]<-sd(fixedMuta$effectSize[fixedMuta$effectSize > 0 & fixedMuta$aroseTick>10*N])
+      moe_fixed[i,"mean_negBurninEffect"]<-mean(fixedMuta$effectSize[fixedMuta$effectSize < 0 & fixedMuta$aroseTick<=10*N])
+      moe_fixed[i,"sd_negBurninEffect"]<-sd(fixedMuta$effectSize[fixedMuta$effectSize < 0 & fixedMuta$aroseTick<=10*N])
+      moe_fixed[i,"mean_negShiftEffect"]<-mean(fixedMuta$effectSize[fixedMuta$effectSize < 0 & fixedMuta$aroseTick>10*N])
+      moe_fixed[i,"sd_negShiftEffect"]<-sd(fixedMuta$effectSize[fixedMuta$effectSize < 0 & fixedMuta$aroseTick>10*N])
+      
+      fixedTime=fixedMuta$endTick-fixedMuta$aroseTick
+      ind=which(fixedMuta$aroseTick<=10*N)
+      fixedTime[ind]<-fixedMuta$endTick[ind] - 10*N
+      moe_fixed[i,"mean_fixedtime"]<-mean(fixedTime)
+      moe_fixed[i,"sd_fixedtime"]<-sd(fixedTime)
+      moe_fixed[i,"mean_burninFixedtime"]<-mean(fixedTime[fixedMuta$aroseTick<=10*N])
+      moe_fixed[i,"sd_burninFixedtime"]<-sd(fixedTime[fixedMuta$aroseTick<=10*N])
+      moe_fixed[i,"mean_shiftFixedtime"]<-mean(fixedTime[fixedMuta$aroseTick>10*N])
+      moe_fixed[i,"sd_shiftFixedtime"]<-sd(fixedTime[fixedMuta$aroseTick>10*N])
+      moe_fixed[i,"mean_posFixedtime"]<-mean(fixedTime[fixedMuta$effectSize > 0])
+      moe_fixed[i,"sd_posFixedtime"]<-sd(fixedTime[fixedMuta$effectSize > 0])
+      moe_fixed[i,"mean_negFixedtime"]<-mean(fixedTime[fixedMuta$effectSize < 0])
+      moe_fixed[i,"sd_negFixedtime"]<-sd(fixedTime[fixedMuta$effectSize < 0])
+      moe_fixed[i,"mean_posBurninFixedtime"]<-mean(fixedTime[fixedMuta$effectSize > 0 & fixedMuta$aroseTick<=10*N])
+      moe_fixed[i,"sd_posBurninFixedtime"]<-sd(fixedTime[fixedMuta$effectSize > 0 & fixedMuta$aroseTick<=10*N])
+      moe_fixed[i,"mean_posShiftFixedtime"]<-mean(fixedTime[fixedMuta$effectSize > 0 & fixedMuta$aroseTick>10*N])
+      moe_fixed[i,"sd_posShiftFixedtime"]<-sd(fixedTime[fixedMuta$effectSize > 0 & fixedMuta$aroseTick>10*N])
+      moe_fixed[i,"mean_negBurninFixedtime"]<-mean(fixedTime[fixedMuta$effectSize < 0 & fixedMuta$aroseTick<=10*N])
+      moe_fixed[i,"sd_negBurninFixedtime"]<-sd(fixedTime[fixedMuta$effectSize < 0 & fixedMuta$aroseTick<=10*N])
+      moe_fixed[i,"mean_negShiftFixedtime"]<-mean(fixedTime[fixedMuta$effectSize < 0 & fixedMuta$aroseTick>10*N])
+      moe_fixed[i,"sd_negShiftFixedtime"]<-sd(fixedTime[fixedMuta$effectSize < 0 & fixedMuta$aroseTick>10*N])
+    }
+    
+    rm(fixedMuta)
+    i<-i+1
+  }
+}
+```
+
+
+## Segregating mutations
+Collect the number of segregating mutations, mean effect and mean allelic frequency at every generation. In addition, collect by splitting the direction of effect
+
+### Segregating mutations over time
+```{r}
+write.table(paras[,1],file="Vs_total.txt",row.names = F,col.names = F,quote=F)
+write.table(paras[,2],file="sdMutation_total.txt",row.names = F,col.names = F,quote=F)
+write.table(paras[,3],file="speed_total.txt",row.names = F,col.names = F,quote=F)
+```
+
+Analyzing through bash
+```{bash}
+sh muta_statistics.sh
+```
+
+burn in:
+```{r}
+muta2<-data.frame(Vs=NA,sdMutation=NA,speedCoef=NA,replicate=NA,generation=NA,
+                  n_segregations=NA,mean_effect=NA,mean_frequency=NA,
+                  n_posSegregations=NA,mean_posEffect=NA,mean_posFrequency=NA,
+                  n_negSegregations=NA,mean_negEffect=NA,mean_negFrequency=NA)
+for(Vs in c(1,10,100)){
+  for(sdMutation in c(0.05,0.1,0.5)){
+    muta2_df<-read.table(paste0("Vs",Vs,"sd",sdMutation,"/burn_in/muta2.txt"),
+                         col.names=c("speedCoef","replicate","generation","n_segregations","mean_effect","mean_frequency"))
+    posMuta2_df<-read.table(paste0("Vs",Vs,"sd",sdMutation,"/burn_in/posMuta2.txt"),
+                            col.names=c("speedCoef","replicate","generation","n_posSegregations","mean_posEffect","mean_posFrequency"))
+    negMuta2_df<-read.table(paste0("Vs",Vs,"sd",sdMutation,"/burn_in/negMuta2.txt"),
+                            col.names=c("speedCoef","replicate","generation","n_negSegregations","mean_negEffect","mean_negFrequency"))
+    muta2_df_total<-left_join(muta2_df,posMuta2_df,by=c("speedCoef","replicate","generation"))%>%
+      left_join(.,negMuta2_df,by=c("speedCoef","replicate","generation"))%>%
+      mutate_if(is.numeric,coalesce,0)
+    
+    muta2_df_total<-data.frame(Vs=Vs,sdMutation=sdMutation,muta2_df_total)
+    
+    muta2<-rbind(muta2,muta2_df_total)
+  }
+}
+muta2<-muta2[-1,]
+burnin_muta2<-muta2
+```
+
+moving optimum:
+```{r}
+muta2<-data.frame(Vs=NA,sdMutation=NA,speedCoef=NA,replicate=NA,generation=NA,
+                  n_segregations=NA,mean_effect=NA,mean_frequency=NA,
+                  n_posSegregations=NA,mean_posEffect=NA,mean_posFrequency=NA,
+                  n_negSegregations=NA,mean_negEffect=NA,mean_negFrequency=NA)
+for(Vs in c(1,10,100)){
+  for(sdMutation in c(0.05,0.1,0.5)){
+    muta2_df<-read.table(paste0("Vs",Vs,"sd",sdMutation,"/gradual/muta2.txt"),
+                         col.names=c("speedCoef","replicate","generation","n_segregations","mean_effect","mean_frequency"))
+    posMuta2_df<-read.table(paste0("Vs",Vs,"sd",sdMutation,"/gradual/posMuta2.txt"),
+                            col.names=c("speedCoef","replicate","generation","n_posSegregations","mean_posEffect","mean_posFrequency"))
+    negMuta2_df<-read.table(paste0("Vs",Vs,"sd",sdMutation,"/gradual/negMuta2.txt"),
+                            col.names=c("speedCoef","replicate","generation","n_negSegregations","mean_negEffect","mean_negFrequency"))
+    muta2_df_total<-left_join(muta2_df,posMuta2_df,by=c("speedCoef","replicate","generation"))%>%
+      left_join(.,negMuta2_df,by=c("speedCoef","replicate","generation"))%>%
+      mutate_if(is.numeric,coalesce,0)
+    
+    muta2_df_total<-data.frame(Vs=Vs,sdMutation=sdMutation,muta2_df_total)
+    
+    muta2<-rbind(muta2,muta2_df_total)
+  }
+}
+muta2<-muta2[-1,]
+shift_muta2<-muta2
+```
+
+Save the above results
+```{r}
+save(parameters,moe_fixed,sse_fixed,shift_muta2,burnin_muta2,file="muta2.RData")
+```
+
+
+### Calculate allele-frequency weighted mean and standard deviation
+```{r}
+library(data.table)
+
+moe_muta_weightedMeanSd <- data.table()
+for(npara in 1:nrow(paras)){
+  Vs=paras[npara,"Vs"]
+  sdMutation=paras[npara,"sdMutation"]
+  speedCoef=paras[npara,"speedCoef"]
+  
+  path=paste0("Vs",Vs,"sd",sdMutation,"/gradual/")
+  
+  for(i in 1:100){
+    err<-try(muta<-fread(paste0(path,"muta_",speedCoef,"_",i,".txt"),
+                              colClasses=c("integer","integer","NULL","NULL","numeric","numeric","NULL"),
+                              col.names=c("replicate","generation","frequency","effectSize")), silent = T)
+
+    if("try-error" %in% class(err)){next}
+
+    summ <- muta[, {
+      sum_freq = sum(frequency)
+      meanEffect = mean(effectSize)
+      sdEffect = sd(effectSize)
+      meanEffect_weighted = sum(frequency * effectSize) / sum_freq
+      sdEffect_weighted = sqrt(sum(frequency * (effectSize - meanEffect_weighted)^2) / sum_freq)
+      
+      list(
+        n_segre = .N,
+        sum_frequency = sum_freq,
+        mean_effect = meanEffect,
+        sd_effect = sdEffect,
+        mean_effect_weighted = meanEffect_weighted,
+        sd_effect_weighted = sdEffect_weighted
+      )
+    }, by = .(generation)]
+
+    summ[, `:=`(
+      Vs = Vs,
+      sdMutation = sdMutation,
+      speedCoef = speedCoef,
+      replicate = i
+    )]
+    
+  moe_muta_weightedMeanSd <- rbindlist(list(moe_muta_weightedMeanSd, summ), use.names = TRUE, fill = TRUE)
+  }
+}
+
+save(moe_muta_weightedMeanSd,file="moe_muta_weightedMeanSd.RData")
+```
+
+### Contribution of fixations
+```{r}
+fixed_contribution<-c()
+
+for(npara in 73:nrow(paras)){
+  Vs=paras[npara,"Vs"]
+  sdMutation=paras[npara,"sdMutation"]
+  speedCoef=paras[npara,"speedCoef"]
+  
+  for(replicate in 1:100){
+    err<-try(fixedMuta<-read.table(paste0("Vs",Vs,"sd",sdMutation,"/gradual/fixedMuta_",speedCoef,"_",replicate,".txt"),colClasses=c("integer","NULL","NULL","numeric","integer","integer"),col.names=c("replicate","id","position","effectSize","aroseTick","endTick")), silent = T)
+
+    if("try-error" %in% class(err)){next}
+    
+    fixed_df<-data.frame(Vs=Vs,sdMutation=sdMutation,speedCoef=speedCoef,replicate=replicate,
+                         n_fixed=c(nrow(fixedMuta)),
+                         n_posFixed=sum(fixedMuta$effectSize>0),
+                         contribution_fixed=sum(fixedMuta$effectSize),
+                         contribution_posFixed=sum(fixedMuta$effectSize[fixedMuta$effectSize>0]))
+    
+    fixed_contribution<-rbind(fixed_contribution,fixed_df)
+  }
+}
+
+save(fixed_contribution,file="fixed_contribution.RData")
+```
+
+
+### disconnect the database
+```{r}
+dbDisconnect(singleTrait_db)
+```
+
